@@ -1,0 +1,20 @@
+services:
+  mikrotik-assistant:
+    build: .
+    container_name: mikrotik-assistant
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      # MT_APP_SECRET — set for stable decryption if you REMOVE the `data` volume.
+      # When unset, the app generates data/.secret on first boot (persisted by the `data` volume).
+      # - MT_APP_SECRET=your-long-random-secret
+    volumes:
+      - data:/app/data
+      - logs:/app/logs
+
+volumes:
+  data:
+  logs:
