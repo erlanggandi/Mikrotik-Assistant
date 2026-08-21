@@ -2,13 +2,20 @@
 # Node 22 (built-in node:sqlite) + express (pure JS, no native deps) -> alpine is sufficient & small.
 FROM node:22-alpine
 
-ENV NODE_ENV=production
+# Retry/timeout tuning: helps on flaky DNS or slow registry links.
+ENV NODE_ENV=production \
+    NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_TIMEOUT=120000 \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
+
 WORKDIR /app
 
-# Dependencies first (leverages layer cache). node:22-alpine ships a non-root `node` user (uid 1000).
-COPY --chown=node:node package.json package-lock.json* ./
-USER node
-RUN npm ci --omit=dev
+# Dependencies first (leverages layer cache).
+# Install as root: avoids npm cache permission edge cases; runtime still switches to non-root below.
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # App source. Excludes node_modules/data/logs via .dockerignore.
 COPY --chown=node:node . .

@@ -4,3 +4,4 @@ logs/
 *.log
 *.txt
 .DS_Store
+*.bak
