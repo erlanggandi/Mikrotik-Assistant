@@ -68,6 +68,7 @@ const SVG_ICONS = {
   'chevron-down': `<polyline points="6 9 12 15 18 9"/>`,
   close: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
   info: `<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>`,
+  menu: `<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>`,
 };
 
 function icon(name, extraClass = '', size = 16) {
@@ -277,7 +278,7 @@ function toggleTheme() {
   localStorage.setItem('mt_theme', next);
   const tBtn = document.getElementById('theme-toggle');
   if (tBtn) {
-    tBtn.innerHTML = next === 'dark' ? `${icon('sun', '', 14)} Mode Terang` : `${icon('moon', '', 14)} Mode Gelap`;
+    tBtn.innerHTML = next === 'dark' ? `${icon('sun', '', 14)} <span>Mode Terang</span>` : `${icon('moon', '', 14)} <span>Mode Gelap</span>`;
   }
 }
 
@@ -471,7 +472,8 @@ function renderShell() {
 
   app.innerHTML = `
   <div class="shell">
-    <aside class="sidebar">
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+    <aside class="sidebar" id="app-sidebar">
       <div class="brand">
         <div class="brand-icon">${icon('router', '', 20)}</div>
         <div class="brand-info">
@@ -516,16 +518,23 @@ function renderShell() {
             <div class="user-role">Sesi Lokal Aktif</div>
           </div>
         </div>
-        <div class="sidebar-action-row">
-          <button id="theme-toggle" class="ghost">${currentTheme() === 'dark' ? icon('sun', '', 14) + ' Mode Terang' : icon('moon', '', 14) + ' Mode Gelap'}</button>
-          <button id="logout-btn" class="danger">${icon('log-out', '', 14)} Keluar</button>
+        <div class="sidebar-actions">
+          <button id="theme-toggle" class="sidebar-foot-btn">
+            ${currentTheme() === 'dark' ? icon('sun', '', 14) + ' <span>Mode Terang</span>' : icon('moon', '', 14) + ' <span>Mode Gelap</span>'}
+          </button>
+          <button id="logout-btn" class="sidebar-foot-btn danger-btn">
+            ${icon('log-out', '', 14)} <span>Keluar</span>
+          </button>
         </div>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
-        <div class="breadcrumbs">${breadcrumbHtml}</div>
+        <div class="topbar-left">
+          <button id="sidebar-toggle" class="sidebar-toggle-btn" title="Menu Navigasi">${icon('menu', '', 18)}</button>
+          <div class="breadcrumbs">${breadcrumbHtml}</div>
+        </div>
         <div class="topbar-actions">
           ${isRouterView ? `
             <button class="btn-sm" onclick="routerAction('${esc(r.id)}', 'sync')">${icon('refresh-cw', '', 13)} Sync</button>
@@ -541,10 +550,30 @@ function renderShell() {
     </main>
   </div>`;
 
+  const sidebar = document.getElementById('app-sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+
+  const closeSidebar = () => {
+    sidebar?.classList.remove('open');
+    backdrop?.classList.remove('active');
+  };
+
+  if (sidebarToggle) {
+    sidebarToggle.onclick = () => {
+      const isOpen = sidebar?.classList.toggle('open');
+      backdrop?.classList.toggle('active', !!isOpen);
+    };
+  }
+  if (backdrop) {
+    backdrop.onclick = closeSidebar;
+  }
+
   // Bind Sidebar Nav
   document.querySelectorAll('.nav-item').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === state.view && (!r || b.dataset.view !== 'routers'));
     b.onclick = () => {
+      closeSidebar();
       navigate(b.dataset.view);
     };
   });
