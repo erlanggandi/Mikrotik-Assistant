@@ -72,7 +72,7 @@ const SVG_ICONS = {
 
 function icon(name, extraClass = '', size = 16) {
   const inner = SVG_ICONS[name] || SVG_ICONS.info;
-  return `<span class="app-icon ${extraClass}" style="width:${size}px;height:${size}px">${inner}</span>`;
+  return `<span class="app-icon ${extraClass}" style="width:${size}px;height:${size}px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block">${inner}</svg></span>`;
 }
 
 function esc(s) {
