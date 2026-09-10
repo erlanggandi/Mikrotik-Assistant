@@ -76,8 +76,23 @@ CREATE TABLE IF NOT EXISTS ai_providers (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_jobs (
+  id TEXT PRIMARY KEY,
+  router_id TEXT NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  commands TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_by TEXT NOT NULL,
+  approved_by TEXT,
+  approved_at TEXT,
+  output TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_audit_router ON audit_runs(router_id);
+CREATE INDEX IF NOT EXISTS idx_execution_jobs_router ON execution_jobs(router_id);
+CREATE INDEX IF NOT EXISTS idx_execution_jobs_status ON execution_jobs(status);
 `);
 
 try {

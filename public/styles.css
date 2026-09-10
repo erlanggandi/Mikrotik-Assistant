@@ -343,6 +343,66 @@ input[type="checkbox"] {
   margin: 0;
 }
 
+/* Toggle Switch */
+.toggle-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  transition: 0.2s;
+  border-radius: 22px;
+}
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: var(--text-secondary);
+  transition: 0.2s;
+  border-radius: 50%;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--primary);
+  border-color: var(--primary);
+}
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(18px);
+  background-color: #ffffff;
+}
+
+.code-btn.exec-btn {
+  background: var(--color-online-soft);
+  color: var(--color-online);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.code-btn.exec-btn:hover {
+  background: var(--color-online);
+  color: #ffffff;
+  border-color: var(--color-online);
+}
+
 /* Status Badges */
 .badge {
   display: inline-flex;

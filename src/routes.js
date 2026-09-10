@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +13,22 @@ import { guardOutput, stripAdvisoryFooter } from './guard.js';
 import { logger } from './logger.js';
 import { listTemplates, getTemplate, renderScript } from './templates.js';
 import { scanMikrotik, selfTest as discoverySelfTest } from './discovery.js';
+import {
+  createExecutionJob,
+  getExecutionJob,
+  listExecutionJobs,
+  approveAndExecuteJob,
+  rejectExecutionJob,
+  isExecutionEnabled,
+} from './jobs.js';
+import {
+  getTelegramConfig,
+  telegramApi,
+  sendTelegramMessage,
+  startTelegramBot,
+  stopTelegramBot,
+  restartTelegramBot,
+} from './telegram.js';
 
 export const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -777,6 +793,142 @@ app.put('/api/settings/password', auth, (req, res) => {
   setSetting('admin_password_hash', hashPassword(password));
   logger.info({ event: 'password_change', operation: 'settings', result: 'success' });
   res.json({ ok: true });
+});
+
+/* ---------- execution jobs & approvals ---------- */
+app.get('/api/settings/execution', auth, (req, res) => {
+  res.json({ enabled: isExecutionEnabled() });
+});
+
+app.put('/api/settings/execution', auth, (req, res) => {
+  const { enabled } = req.body || {};
+  setSetting('execution_enabled', enabled ? '1' : '0');
+  logger.info({ event: 'execution_setting_change', enabled: !!enabled });
+  res.json({ ok: true, enabled: isExecutionEnabled() });
+});
+
+app.post('/api/routers/:id/jobs', auth, (req, res) => {
+  const router = getRouter(req.params.id);
+  if (!router) return res.status(404).json({ error: 'router not found' });
+  const { commands, source = 'web' } = req.body || {};
+  if (!commands) return res.status(400).json({ error: 'commands wajib diisi' });
+  try {
+    const job = createExecutionJob({
+      routerId: router.id,
+      source,
+      commands,
+      requestedBy: 'admin',
+    });
+    res.json({ ok: true, job });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/api/routers/:id/jobs', auth, (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+  const jobs = listExecutionJobs(req.params.id, { limit, offset });
+  res.json({ ok: true, jobs });
+});
+
+app.get('/api/jobs/:id', auth, (req, res) => {
+  const job = getExecutionJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job tidak ditemukan' });
+  res.json({ ok: true, job });
+});
+
+app.post('/api/jobs/:id/approve', auth, async (req, res) => {
+  try {
+    const result = await approveAndExecuteJob(req.params.id, { approvedBy: 'admin' });
+    res.json({ ok: result.ok, result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/jobs/:id/reject', auth, (req, res) => {
+  try {
+    const job = rejectExecutionJob(req.params.id, { rejectedBy: 'admin' });
+    res.json({ ok: true, job });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/* ---------- telegram bot settings ---------- */
+app.get('/api/settings/telegram', auth, async (req, res) => {
+  const conf = getTelegramConfig();
+  let botInfo = null;
+  if (conf.token) {
+    try {
+      const me = await telegramApi(conf.token, 'getMe');
+      if (me.ok) botInfo = me.result;
+    } catch { /* ignore network error on getMe */ }
+  }
+  res.json({
+    enabled: conf.enabled,
+    tokenConfigured: !!conf.token,
+    tokenPreview: keyPreview(conf.token),
+    allowedChats: conf.allowedChats.join(', '),
+    defaultRouterId: conf.defaultRouterId,
+    botInfo,
+  });
+});
+
+app.put('/api/settings/telegram', auth, (req, res) => {
+  const { token, allowedChats, enabled, defaultRouterId } = req.body || {};
+  if (token && !token.includes('••••')) {
+    const { enc, iv } = encryptSecret(token.trim());
+    setSetting('telegram_bot_token_enc', enc);
+    setSetting('telegram_bot_token_iv', iv);
+  }
+  if (allowedChats != null) {
+    setSetting('telegram_allowed_chats', String(allowedChats).trim());
+  }
+  if (enabled != null) {
+    setSetting('telegram_enabled', enabled ? '1' : '0');
+  }
+  if (defaultRouterId != null) {
+    setSetting('telegram_default_router_id', String(defaultRouterId).trim());
+  }
+
+  restartTelegramBot();
+  logger.info({ event: 'telegram_setting_updated', enabled: !!enabled });
+  res.json({ ok: true });
+});
+
+app.post('/api/settings/telegram/test', auth, async (req, res) => {
+  let { token, chatId } = req.body || {};
+  if (!token || token.includes('••••')) {
+    const conf = getTelegramConfig();
+    token = conf.token;
+  }
+  if (!token) return res.status(400).json({ error: 'Token bot belum diisi.' });
+
+  try {
+    const me = await telegramApi(token, 'getMe');
+    if (!me.ok) {
+      return res.status(400).json({ error: `Gagal verifikasi token ke Telegram: ${me.description || 'Token tidak valid'}` });
+    }
+
+    if (chatId) {
+      const sendRes = await sendTelegramMessage(
+        token,
+        chatId,
+        `🔔 *Uji Koneksi Telegram Berhasil!*\n\nAI MikroTik Assistant berhasil terhubung dengan bot @${me.result?.username}.\nNotifikasi & chat siap digunakan.`
+      );
+      if (!sendRes.ok) {
+        return res.status(400).json({
+          error: `Bot valid (@${me.result?.username}), namun gagal mengirim pesan ke Chat ID ${chatId}: ${sendRes.description || 'Pastikan Anda sudah klik START di bot tersebut'}`
+        });
+      }
+    }
+
+    res.json({ ok: true, bot: me.result });
+  } catch (err) {
+    res.status(502).json({ error: `Koneksi ke Telegram API gagal: ${err.message}` });
+  }
 });
 
 /* ---------- logs ---------- */

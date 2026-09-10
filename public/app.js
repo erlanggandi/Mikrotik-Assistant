@@ -144,12 +144,13 @@ function renderMd(text) {
           <div class="code-actions">
             <button class="code-btn" onclick="copyCodeBlock('${blockId}')">${icon('copy', '', 12)} Salin Skrip</button>
             <button class="code-btn" onclick="downloadRscScript('${blockId}', 'mikrotik_script.rsc')">${icon('download', '', 12)} Unduh .rsc</button>
+            <button class="code-btn exec-btn" onclick="stageCodeExecution('${blockId}')">${icon('zap', '', 12)} Ajukan Eksekusi</button>
           </div>
         </div>
         <pre><code class="lang-${esc(langLabel)}">${escapedCode}</code></pre>
         <div class="code-safety-tag">
-          ${icon('shield-alert', '', 13)}
-          <span>Mode Read-Only: AI tidak dapat mengeksekusi skrip. Review baris di atas secara manual sebelum menjalankan di RouterOS.</span>
+          ${icon('shield-check', '', 13)}
+          <span>Human Approval Required: Klik "Ajukan Eksekusi" untuk meninjau dan menyetujui baris perintah sebelum dijalankan di RouterOS.</span>
         </div>
       </div>
     `);
@@ -259,6 +260,129 @@ window.downloadRscScript = function(blockId, filename = 'script.rsc') {
   URL.revokeObjectURL(url);
   showToast(`File ${filename} berhasil diunduh`, 'ok');
 };
+
+window.stageCodeExecution = function(blockId) {
+  const wrap = document.getElementById(blockId);
+  if (!wrap) return;
+  const code = wrap.querySelector('code')?.innerText || '';
+  const lines = code.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  if (!lines.length) {
+    showToast('Tidak ada baris perintah RouterOS yang valid untuk dieksekusi', 'warn');
+    return;
+  }
+  const defaultRouterId = state.router ? state.router.id : (state.routers[0]?.id || null);
+  openExecutionApprovalModal(defaultRouterId, lines, 'ai_chat');
+};
+
+function openExecutionApprovalModal(defaultRouterId, commands, source = 'web') {
+  let targetRouterId = defaultRouterId || (state.routers[0]?.id || '');
+  if (!state.routers.length) {
+    showToast('Belum ada router terdaftar di sistem', 'warn');
+    return;
+  }
+  if (!targetRouterId) targetRouterId = state.routers[0].id;
+
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay';
+  ov.id = 'modal-exec-approval';
+
+  const renderModalContent = () => {
+    const r = state.routers.find((x) => x.id === targetRouterId) || state.routers[0];
+    ov.innerHTML = `
+      <div class="modal" style="max-width:580px">
+        <div class="modal-head">
+          <h4>${icon('zap', '', 16)} Tinjau &amp; Setujui Eksekusi Konfigurasi</h4>
+          <button class="ghost btn-sm" data-close>${icon('close', '', 14)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="msg warn" style="margin-top:0">
+            ${icon('shield-alert', '', 14)} <b>Human-in-the-Loop:</b> Perintah di bawah hanya akan dieksekusi ke RouterOS setelah Anda menekan tombol setujui di bawah.
+          </div>
+
+          <label style="margin-top:10px">Pilih Router Target</label>
+          <select id="exec-target-router" style="margin-bottom:12px">
+            ${state.routers
+              .map(
+                (x) => `<option value="${x.id}" ${x.id === targetRouterId ? 'selected' : ''}>${esc(x.name)} (${esc(x.host)})</option>`
+              )
+              .join('')}
+          </select>
+
+          <label>Daftar Baris Perintah RouterOS (${commands.length} baris):</label>
+          <div class="table-wrap" style="max-height:220px;overflow-y:auto;background:var(--bg-app);border-radius:var(--radius-sm);border:1px solid var(--border-medium);padding:10px">
+            <pre style="margin:0;font-size:12px;font-family:var(--font-mono);line-height:1.6"><code>${commands
+              .map((c, idx) => `${idx + 1}. ${esc(c)}`)
+              .join('\n')}</code></pre>
+          </div>
+
+          <div id="exec-live-feedback" style="margin-top:12px"></div>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost" data-close>Batal</button>
+          <button class="primary" id="btn-exec-run" style="background:#10b981;border-color:#10b981">${icon('check', '', 13)} Setujui &amp; Jalankan Sekarang</button>
+        </div>
+      </div>
+    `;
+
+    ov.querySelectorAll('[data-close]').forEach((btn) => {
+      btn.onclick = () => ov.remove();
+    });
+
+    const sel = ov.querySelector('#exec-target-router');
+    if (sel) {
+      sel.onchange = (e) => {
+        targetRouterId = e.target.value;
+      };
+    }
+
+    const runBtn = ov.querySelector('#btn-exec-run');
+    runBtn.onclick = async () => {
+      runBtn.disabled = true;
+      runBtn.innerHTML = `${icon('refresh-cw', '', 13)} Menghubungkan...`;
+      const feedback = ov.querySelector('#exec-live-feedback');
+      feedback.innerHTML = '<div class="msg">⏳ Membuat staging job &amp; mengeksekusi di RouterOS...</div>';
+
+      try {
+        const jobData = await api(`/api/routers/${targetRouterId}/jobs`, {
+          method: 'POST',
+          body: { commands, source },
+        });
+
+        const approveRes = await api(`/api/jobs/${jobData.job.id}/approve`, {
+          method: 'POST',
+        });
+
+        if (approveRes.ok) {
+          feedback.innerHTML = `
+            <div class="msg ok">
+              <b>✅ Berhasil Diterapkan!</b> Seluruh baris konfigurasi berhasil dieksekusi di router <b>${esc(r.name)}</b>.
+            </div>
+          `;
+          runBtn.style.display = 'none';
+          showToast('Konfigurasi sukses diaplikasikan ke router!', 'ok');
+          if (state.router && state.router.id === targetRouterId) {
+            routerAction(targetRouterId, 'sync');
+          }
+        } else {
+          feedback.innerHTML = `
+            <div class="msg err">
+              <b>❌ Eksekusi Gagal:</b> ${esc(approveRes.result?.error || 'Kesalahan saat menjalankan perintah')}
+            </div>
+          `;
+          runBtn.disabled = false;
+          runBtn.innerHTML = `${icon('check', '', 13)} Coba Lagi`;
+        }
+      } catch (err) {
+        feedback.innerHTML = `<div class="msg err"><b>❌ Gagal:</b> ${esc(err.message)}</div>`;
+        runBtn.disabled = false;
+        runBtn.innerHTML = `${icon('check', '', 13)} Coba Lagi`;
+      }
+    };
+  };
+
+  renderModalContent();
+  document.body.appendChild(ov);
+}
 
 /* ==========================================================================
    Theme & Notifications
@@ -2086,6 +2210,7 @@ async function renderConfig() {
       <div class="row" style="margin-top:14px">
         <button class="primary" id="cfg-copy">${icon('copy', '', 14)} Salin Skrip</button>
         <button id="cfg-download">${icon('download', '', 14)} Unduh .rsc</button>
+        <button class="primary" id="cfg-exec" style="background:#10b981;border-color:#10b981">${icon('zap', '', 14)} Ajukan Eksekusi</button>
         <button id="cfg-back" class="ghost">${icon('edit', '', 14)} Ubah Parameter</button>
         <button id="cfg-new" class="ghost">Pilih Template Lain</button>
       </div>
@@ -2106,6 +2231,11 @@ async function renderConfig() {
       a.click();
       a.remove();
       showToast('File skrip diunduh', 'ok');
+    };
+    document.getElementById('cfg-exec').onclick = () => {
+      const lines = state.config.script.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+      const defaultRouterId = state.router ? state.router.id : (state.routers[0]?.id || null);
+      openExecutionApprovalModal(defaultRouterId, lines, 'template');
     };
     document.getElementById('cfg-back').onclick = () => { state.config.script = null; renderConfig(); };
     document.getElementById('cfg-new').onclick = () => { state.config = { tpl: null, values: {}, script: null }; renderConfig(); };
@@ -2355,37 +2485,209 @@ async function renderProvider() {
 }
 
 /* ==========================================================================
-   Settings View (Password & System Info)
+   Settings View (Password, Execution Mode & Telegram Integration)
    ========================================================================== */
-function renderSettings() {
+async function renderSettings() {
   const content = document.getElementById('content');
+  content.innerHTML = '<div class="card"><div class="empty">Memuat pengaturan sistem...</div></div>';
+
+  let execSetting = { enabled: true };
+  let tgSetting = { enabled: false, tokenConfigured: false, tokenPreview: '', allowedChats: '', defaultRouterId: '', botInfo: null };
+  try {
+    const [eRes, tgRes] = await Promise.all([
+      api('/api/settings/execution').catch(() => ({ enabled: true })),
+      api('/api/settings/telegram').catch(() => ({})),
+    ]);
+    if (eRes) execSetting = eRes;
+    if (tgRes) tgSetting = tgRes;
+  } catch {}
+
+  const tgStatusBadge = tgSetting.enabled && tgSetting.botInfo
+    ? `<span class="badge ok">🟢 Aktif (@${esc(tgSetting.botInfo.username)})</span>`
+    : tgSetting.enabled
+    ? `<span class="badge warn">🟡 Menghubungkan...</span>`
+    : `<span class="badge neutral">⚪ Nonaktif</span>`;
+
   content.innerHTML = `
-  <div class="card" style="max-width:460px">
-    <div class="card-title">
-      <h4>Ganti Password Administrator</h4>
-      ${icon('lock', '', 16)}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(420px, 1fr));gap:16px;max-width:1100px">
+    
+    <!-- Card 1: Execution Control -->
+    <div class="card">
+      <div class="card-title">
+        <div>
+          <h4>Mode Eksekusi Konfigurasi (Human Approval)</h4>
+          <p class="card-sub">Kontrol keamanan eksekusi perintah ke perangkat RouterOS.</p>
+        </div>
+        ${icon('zap', '', 18)}
+      </div>
+
+      <div class="msg ${execSetting.enabled ? 'ok' : 'warn'}" style="margin-top:0">
+        ${execSetting.enabled ? icon('shield-check', '', 15) : icon('shield-alert', '', 15)}
+        <b>${execSetting.enabled ? 'Mode Eksekusi Terbimbing Aktif' : 'Mode 100% Read-Only Aktif'}:</b>
+        ${execSetting.enabled
+          ? 'Perintah RouterOS dapat dieksekusi setelah mendapatkan persetujuan manual (approval) dari Anda via Web atau Telegram.'
+          : 'Aplikasi beroperasi murni konsultatif. Segala aksi eksekusi diblokir sepenuhnya.'}
+      </div>
+
+      <div style="margin:16px 0">
+        <label class="toggle-wrap">
+          <span class="toggle-switch">
+            <input type="checkbox" id="setting-exec-toggle" ${execSetting.enabled ? 'checked' : ''} />
+            <span class="toggle-slider"></span>
+          </span>
+          <span style="font-weight:600;font-size:13.5px">Izinkan Eksekusi Konfigurasi (Wajib Lewat Approval Admin)</span>
+        </label>
+      </div>
+
+      <div id="exec-setting-msg"></div>
+      <button class="primary" id="btn-save-exec" style="margin-top:10px">${icon('check', '', 13)} Simpan Pengaturan Eksekusi</button>
     </div>
-    <p class="card-sub">Perbarui kredensial login akun admin lokal aplikasi.</p>
 
-    <label>Password Saat Ini</label>
-    <input id="s-cur" type="password" required />
+    <!-- Card 2: Telegram Bot Integration -->
+    <div class="card">
+      <div class="card-title">
+        <div>
+          <h4>Integrasi Telegram Bot (AI Copilot &amp; Approval)</h4>
+          <p class="card-sub">Pantau router, telemetri, audit, dan setujui eksekusi langsung dari HP Anda.</p>
+        </div>
+        ${tgStatusBadge}
+      </div>
 
-    <label>Password Baru (Minimal 4 Karakter)</label>
-    <input id="s-new" type="password" required />
+      <div style="margin:14px 0">
+        <label class="toggle-wrap">
+          <span class="toggle-switch">
+            <input type="checkbox" id="setting-tg-toggle" ${tgSetting.enabled ? 'checked' : ''} />
+            <span class="toggle-slider"></span>
+          </span>
+          <span style="font-weight:600;font-size:13.5px">Aktifkan Bot Telegram (Long Polling)</span>
+        </label>
+      </div>
 
-    <div id="settings-msg"></div>
-    <button class="primary" id="s-save" style="margin-top:14px">${icon('check', '', 13)} Simpan Password Baru</button>
-  </div>
+      <label>HTTP API Token Bot Telegram (dari @BotFather)</label>
+      <input id="tg-token" type="password" placeholder="${tgSetting.tokenPreview ? 'Tersimpan: ' + tgSetting.tokenPreview : '7123456789:AAH...'}" />
 
-  <div class="card" style="max-width:460px">
-    <h4>Informasi Sistem</h4>
-    <div class="cell-muted" style="font-size:12.5px;line-height:1.8">
-      <div>Aplikasi: <b>AI MikroTik Assistant v0.1</b></div>
-      <div>Arsitektur Keamanan: <b>Read-Only Guard Boundary Active</b></div>
-      <div>Enkripsi Kredensial: <b>AES-256-GCM</b></div>
+      <label style="margin-top:10px">Whitelist Chat ID / User ID (Dipisahkan koma)</label>
+      <input id="tg-chats" type="text" placeholder="Contoh: 123456789, 987654321" value="${esc(tgSetting.allowedChats || '')}" />
+      <p class="cell-muted" style="font-size:11.5px;margin-top:2px">Hanya akun dengan ID di atas yang dapat berinteraksi dan menyetujui eksekusi via Telegram.</p>
+
+      <label style="margin-top:10px">Router Default Sesi Chat</label>
+      <select id="tg-def-router">
+        <option value="">— Otomatis (Gunakan Router Pertama) —</option>
+        ${state.routers.map((r) => `<option value="${r.id}" ${r.id === tgSetting.defaultRouterId ? 'selected' : ''}>${esc(r.name)} (${esc(r.host)})</option>`).join('')}
+      </select>
+
+      <div id="tg-setting-msg" style="margin-top:10px"></div>
+
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="btn-save-tg">${icon('check', '', 13)} Simpan Pengaturan Telegram</button>
+        <button id="btn-test-tg" class="ghost">${icon('refresh-cw', '', 13)} Tes Bot &amp; Kirim Pesan Uji</button>
+      </div>
+
+      <details style="margin-top:16px;font-size:12.5px;color:var(--text-secondary);background:var(--bg-app);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle)">
+        <summary style="cursor:pointer;font-weight:600;color:var(--primary)">📖 Panduan Membuat Bot Telegram (3 Menit)</summary>
+        <ol style="margin:8px 0 0 16px;padding:0;line-height:1.7">
+          <li>Buka Telegram, cari <b>@BotFather</b> lalu ketik <code>/newbot</code>.</li>
+          <li>Masukkan nama bot dan username (misal: <code>my_mikrotik_bot</code>). Salin Token API yang diberikan.</li>
+          <li>Cari bot <b>@userinfobot</b> di Telegram untuk melihat <b>Chat ID</b> angka Anda (contoh: <code>123456789</code>).</li>
+          <li>Ketik <code>/start</code> ke bot yang baru Anda buat agar bot dapat mengirim pesan ke Anda.</li>
+          <li>Masukkan Token &amp; Chat ID pada kolom di atas, lalu klik <b>Simpan &amp; Aktifkan</b>.</li>
+        </ol>
+      </details>
+    </div>
+
+    <!-- Card 3: Password Admin -->
+    <div class="card">
+      <div class="card-title">
+        <h4>Ganti Password Administrator</h4>
+        ${icon('lock', '', 16)}
+      </div>
+      <p class="card-sub">Perbarui kredensial login akun admin lokal aplikasi.</p>
+
+      <label>Password Saat Ini</label>
+      <input id="s-cur" type="password" required />
+
+      <label style="margin-top:10px">Password Baru (Minimal 4 Karakter)</label>
+      <input id="s-new" type="password" required />
+
+      <div id="settings-msg"></div>
+      <button class="primary" id="s-save" style="margin-top:14px">${icon('check', '', 13)} Simpan Password Baru</button>
+    </div>
+
+    <!-- Card 4: System Info -->
+    <div class="card">
+      <h4>Informasi Sistem &amp; Keamanan</h4>
+      <div class="cell-muted" style="font-size:12.5px;line-height:1.8;margin-top:10px">
+        <div>Aplikasi: <b>AI MikroTik Assistant v0.2</b></div>
+        <div>Arsitektur Keamanan: <b>Human-in-the-Loop Approval Gated</b></div>
+        <div>Enkripsi Kredensial &amp; Token: <b>AES-256-GCM Hardware-Accelerated</b></div>
+        <div>Protokol Bot: <b>Long Polling (Zero-Port-Forwarding / Behind NAT)</b></div>
+      </div>
     </div>
   </div>`;
 
+  // Bind Execution Save
+  document.getElementById('btn-save-exec').onclick = async () => {
+    const enabled = document.getElementById('setting-exec-toggle').checked;
+    try {
+      await api('/api/settings/execution', {
+        method: 'PUT',
+        body: { enabled },
+      });
+      showToast('Pengaturan mode eksekusi tersimpan', 'ok');
+      showMsg('exec-setting-msg', `Mode eksekusi ${enabled ? 'DIAKTIFKAN (wajib approval)' : 'DINONAKTIFKAN (100% read-only)'}.`, 'ok');
+    } catch (e) {
+      showMsg('exec-setting-msg', e.message, 'err');
+    }
+  };
+
+  // Bind Telegram Save
+  document.getElementById('btn-save-tg').onclick = async () => {
+    const enabled = document.getElementById('setting-tg-toggle').checked;
+    const token = document.getElementById('tg-token').value.trim();
+    const allowedChats = document.getElementById('tg-chats').value.trim();
+    const defaultRouterId = document.getElementById('tg-def-router').value;
+
+    try {
+      await api('/api/settings/telegram', {
+        method: 'PUT',
+        body: {
+          enabled,
+          token: token || undefined,
+          allowedChats,
+          defaultRouterId,
+        },
+      });
+      showToast('Pengaturan Telegram Bot berhasil disimpan', 'ok');
+      showMsg('tg-setting-msg', 'Pengaturan Telegram tersimpan. Mesin bot direstart.', 'ok');
+      setTimeout(renderSettings, 1000);
+    } catch (e) {
+      showMsg('tg-setting-msg', e.message, 'err');
+    }
+  };
+
+  // Bind Telegram Test
+  document.getElementById('btn-test-tg').onclick = async () => {
+    const token = document.getElementById('tg-token').value.trim();
+    const allowedChats = document.getElementById('tg-chats').value.trim();
+    const firstChatId = allowedChats.split(',')[0]?.trim();
+
+    showMsg('tg-setting-msg', 'Menguji koneksi ke Telegram API...', '');
+    try {
+      const res = await api('/api/settings/telegram/test', {
+        method: 'POST',
+        body: {
+          token: token || undefined,
+          chatId: firstChatId || undefined,
+        },
+      });
+      showMsg('tg-setting-msg', `✅ Sukses! Bot: @${res.bot?.username} (${res.bot?.first_name}). ${firstChatId ? 'Pesan uji berhasil dikirim ke Chat ID ' + firstChatId : ''}`, 'ok');
+      showToast(`Bot Telegram @${res.bot?.username} terhubung`, 'ok');
+    } catch (e) {
+      showMsg('tg-setting-msg', `❌ ${e.message}`, 'err');
+    }
+  };
+
+  // Bind Password Save
   document.getElementById('s-save').onclick = async () => {
     try {
       await api('/api/settings/password', {

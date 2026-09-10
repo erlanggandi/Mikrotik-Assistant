@@ -9,12 +9,15 @@ import {
   isReadCommand,
   RouterOSConnection,
   wordsToAttrs,
+  cliToApiSentence,
+  isDestructiveCommand,
 } from '../src/routeros.js';
 import { createHash } from 'node:crypto';
 import { containsWriteCommands, guardOutput } from '../src/guard.js';
 import { normalizeChatUrl } from '../src/llm.js';
 import { buildDigest, buildMessages, isStale } from '../src/orchestrator.js';
 import { normalizeRows } from '../src/collector.js';
+import { splitTelegramMessage, isChatAllowed } from '../src/telegram.js';
 
 test('frame length roundtrip at boundaries', () => {
   for (const len of [0, 1, 0x7f, 0x80, 0x3fff, 0x4000, 0x1fffff, 0x200000]) {
@@ -155,4 +158,44 @@ test('normalizer redacts secrets', () => {
   const rows = normalizeRows([{ words: ['!re', '=name=user1', '=password=supersecret', '=local-address=10.0.0.1'] }]);
   assert.equal(rows[0]['password'], '***');
   assert.equal(rows[0]['name'], 'user1');
+});
+
+test('cliToApiSentence converts RouterOS CLI to API words', () => {
+  const words = cliToApiSentence('/ip firewall filter add chain=input protocol=tcp dst-port=80 action=accept comment="Allow HTTP"');
+  assert.deepEqual(words, [
+    '/ip/firewall/filter/add',
+    '=chain=input',
+    '=protocol=tcp',
+    '=dst-port=80',
+    '=action=accept',
+    '=comment=Allow HTTP',
+  ]);
+
+  assert.equal(cliToApiSentence('   # komentar '), null);
+  assert.equal(cliToApiSentence(''), null);
+});
+
+test('isDestructiveCommand blocks dangerous commands', () => {
+  assert.equal(isDestructiveCommand(['/system/reset-configuration']), true);
+  assert.equal(isDestructiveCommand(['/system/reboot']), true);
+  assert.equal(isDestructiveCommand(['/disk/format']), true);
+  assert.equal(isDestructiveCommand(['/ip/firewall/filter/add', '=chain=input']), false);
+});
+
+test('splitTelegramMessage splits text exceeding max length', () => {
+  const shortText = 'Halo dunia';
+  assert.deepEqual(splitTelegramMessage(shortText, 50), ['Halo dunia']);
+
+  const longText = 'Baris satu\n\nBaris dua\n\nBaris tiga';
+  const parts = splitTelegramMessage(longText, 15);
+  assert.ok(parts.length > 1);
+  assert.ok(parts.every((p) => p.length <= 15));
+});
+
+test('isChatAllowed checks whitelist', () => {
+  const allowed = ['12345678', '999888'];
+  assert.equal(isChatAllowed(12345678, 0, allowed), true);
+  assert.equal(isChatAllowed(0, 999888, allowed), true);
+  assert.equal(isChatAllowed(111222, 333444, allowed), false);
+  assert.equal(isChatAllowed(12345678, 0, []), false);
 });

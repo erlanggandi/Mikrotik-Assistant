@@ -71,6 +71,79 @@ export function isReadCommand(words) {
   return !WRITE_COMMAND.test(cmd) && (cmd.endsWith('/print') || cmd.endsWith('/getall') || /\/(listen|status)$/.test(cmd));
 }
 
+export function tokenizeCli(line) {
+  const tokens = [];
+  let curr = '';
+  let inQuote = false;
+  let quoteChar = '';
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if ((ch === '"' || ch === "'") && (!inQuote || quoteChar === ch)) {
+      inQuote = !inQuote;
+      if (inQuote) quoteChar = ch;
+      else quoteChar = '';
+      continue;
+    }
+    if (!inQuote && /\s/.test(ch)) {
+      if (curr) {
+        tokens.push(curr);
+        curr = '';
+      }
+    } else {
+      curr += ch;
+    }
+  }
+  if (curr) tokens.push(curr);
+  return tokens;
+}
+
+export const BLOCKED_DESTRUCTIVE = [
+  /^\/system\/(reset-configuration|reboot|shutdown)$/i,
+  /^\/disk\/(format|eject)/i,
+  /^\/certificate\/reset-certificate-cache$/i,
+  /^\/user\/(remove|set)$/i,
+];
+
+export function isDestructiveCommand(words) {
+  const cmd = words[0] || '';
+  return BLOCKED_DESTRUCTIVE.some((re) => re.test(cmd));
+}
+
+export function cliToApiSentence(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  const rawTokens = tokenizeCli(trimmed);
+  if (!rawTokens.length) return null;
+
+  let pathParts = [];
+  let attrTokens = [];
+  let isCollectingPath = true;
+
+  for (let i = 0; i < rawTokens.length; i++) {
+    const tok = rawTokens[i];
+    if (isCollectingPath) {
+      if (tok.includes('=') && !tok.startsWith('/')) {
+        isCollectingPath = false;
+        attrTokens.push(tok);
+      } else {
+        const subParts = tok.split('/').filter(Boolean);
+        pathParts.push(...subParts);
+      }
+    } else {
+      attrTokens.push(tok);
+    }
+  }
+
+  if (!pathParts.length) return null;
+  const apiCmd = '/' + pathParts.join('/');
+  const words = [apiCmd];
+
+  for (const attr of attrTokens) {
+    words.push('=' + attr);
+  }
+  return words;
+}
+
 class BufferReader {
   constructor(onData) {
     this.buf = Buffer.alloc(0);
@@ -192,9 +265,14 @@ export class RouterOSConnection {
     this.authenticated = true;
   }
 
-  async command(words) {
+  async command(words, { allowWrite = false } = {}) {
     if (!this.socket || this.socket.destroyed) throw new Error('not connected');
-    if (!isReadCommand(words)) throw new Error('read-only boundary: write/unsupported command rejected');
+    if (!allowWrite && !isReadCommand(words)) {
+      throw new Error('read-only boundary: write/unsupported command rejected');
+    }
+    if (allowWrite && isDestructiveCommand(words)) {
+      throw new Error(`Perintah berbahaya diblokir secara permanen: ${words[0]}`);
+    }
     if (!this.authenticated && words[0] !== '/login') throw new Error('login required');
     await new Promise((resolve, reject) => {
       this.socket.write(encodeSentence(words), (e) => (e ? reject(e) : resolve()));
@@ -241,6 +319,27 @@ export class RouterOSConnection {
       trapSince = null;
       clearInterval(timer);
     }
+  }
+
+  async executeScript(scriptOrLines, { onProgress } = {}) {
+    const lines = Array.isArray(scriptOrLines) ? scriptOrLines : String(scriptOrLines).split('\n');
+    const results = [];
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i].trim();
+      if (!raw || raw.startsWith('#')) continue;
+      const words = cliToApiSentence(raw);
+      if (!words) continue;
+      if (onProgress) onProgress({ lineIndex: i, total: lines.length, command: raw });
+      try {
+        const res = await this.command(words, { allowWrite: true });
+        results.push({ line: raw, ok: true, output: res.map((r) => r.words.join(' ')).join('\n') });
+      } catch (err) {
+        const msg = err.message || String(err);
+        results.push({ line: raw, ok: false, error: msg });
+        return { ok: false, error: `Gagal pada baris: "${raw}". Error: ${msg}`, results };
+      }
+    }
+    return { ok: true, results };
   }
 
   close() {
