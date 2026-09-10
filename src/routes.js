@@ -157,8 +157,9 @@ async function requireOnline(router) {
     return null;
   } catch (e) {
     const msg = e?.message || String(e);
-    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(msg, router.id);
-    return msg;
+    const friendly = friendlyRouterError(msg, router.host, router.api_port);
+    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(friendly, router.id);
+    return friendly;
   }
 }
 
@@ -216,10 +217,15 @@ app.get('/api/routers', auth, (req, res) => {
 
 
 app.post('/api/routers/test-preflight', auth, async (req, res) => {
-  const { host, api_port = 8728, secure = false, username, password = '' } = req.body || {};
+  const { host, api_port = 8728, secure = false, username, password = '', router_id } = req.body || {};
   if (!host || !username) return res.status(400).json({ error: 'host dan username wajib diisi' });
+  let effectivePassword = password;
+  if (!effectivePassword && router_id) {
+    const existing = getRouter(router_id);
+    if (existing) effectivePassword = existing.password;
+  }
   const t0 = Date.now();
-  const probe = { host, port: Number(api_port) || 8728, secure: !!secure, username, password: password || '' };
+  const probe = { host, port: Number(api_port) || 8728, secure: !!secure, username, password: effectivePassword || '' };
   try {
     const info = await testConnection(probe);
     logger.info({ event: 'connection_test', operation: 'routers/test-preflight', result: 'success', durationMs: Date.now() - t0, host });

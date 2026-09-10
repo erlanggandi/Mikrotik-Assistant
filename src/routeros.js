@@ -218,8 +218,8 @@ export class RouterOSConnection {
     this.host = host;
     this.port = port;
     this.secure = !!secure;
-    this.user = username;
-    this.pass = password;
+    this.user = username ?? '';
+    this.pass = password ?? '';
     this.socket = null;
     this.reader = null;
     this.sentences = [];
@@ -290,21 +290,62 @@ export class RouterOSConnection {
 
   async login() {
     if (this.authenticated) return;
-    const replies = await this.command(['/login', `=name=${this.user}`, `=password=${this.pass}`]);
+    const user = this.user ?? '';
+    const pass = this.pass ?? '';
+
+    // Modern RouterOS (v6.43+ and v7.x) login
+    let replies;
+    try {
+      replies = await this.command(['/login', `=name=${user}`, `=password=${pass}`]);
+    } catch (err) {
+      if (!/read-only boundary|login failed|invalid user name or password|cannot log in/i.test(err.message)) {
+        throw err;
+      }
+      replies = [{ words: ['!trap', `=message=${err.message}`] }];
+    }
+
     const first = replies[0];
-    if (first?.words[0] === '!trap') throw new Error(trapMessage(first) || 'login failed');
+    const isTrap = first?.words[0] === '!trap';
     const ret = first?.words.find((w) => w.startsWith('=ret='));
-    if (ret) {
-      const challenge = Buffer.from(ret.slice(5), 'hex');
+
+    // Success on modern RouterOS
+    if (!isTrap && !ret) {
+      this.authenticated = true;
+      return;
+    }
+
+    // Challenge-response (RouterOS pre-6.43 or challenge return)
+    let challengeHex = ret ? ret.slice(5) : null;
+    if (isTrap && !challengeHex) {
+      try {
+        const legacyReplies = await this.command(['/login']);
+        const legacyFirst = legacyReplies[0];
+        const legacyRet = legacyFirst?.words.find((w) => w.startsWith('=ret='));
+        if (legacyRet) {
+          challengeHex = legacyRet.slice(5);
+        }
+      } catch {
+        // keep original error
+      }
+    }
+
+    if (challengeHex) {
+      const challenge = Buffer.from(challengeHex, 'hex');
       const md = createHash('md5');
       md.update(Buffer.from([0]));
-      md.update(Buffer.from(this.pass, 'utf8'));
+      md.update(Buffer.from(pass, 'utf8'));
       md.update(challenge);
       const response = '00' + md.digest('hex');
-      const r2 = await this.command(['/login', `=name=${this.user}`, `=response=${response}`]);
+      const r2 = await this.command(['/login', `=name=${user}`, `=response=${response}`]);
       for (const s of r2) {
         if (s.words[0] === '!trap') throw new Error(trapMessage(s) || 'login failed');
       }
+      this.authenticated = true;
+      return;
+    }
+
+    if (isTrap) {
+      throw new Error(trapMessage(first) || 'login failed');
     }
     this.authenticated = true;
   }

@@ -1101,6 +1101,7 @@ function openRouterForm(existing) {
   const testBtn = mask.querySelector('#f-test');
   const saveBtn = mask.querySelector('#f-save');
   const formData = () => ({
+    router_id: r.id || undefined,
     host: mask.querySelector('#f-host').value.trim(),
     api_port: Number(mask.querySelector('#f-port').value || 8728),
     secure: mask.querySelector('#f-secure').checked,
@@ -1294,16 +1295,22 @@ async function renderStatusTab(body) {
   const ov = state.overview;
 
   if (!ov || state.overviewError) {
+    const errText = state.overviewError || (state.router?.last_error ? `Detail: ${state.router.last_error}` : 'Pastikan host, kredensial, dan port API sudah benar.');
     body.innerHTML = `
     <div class="card">
       <div class="card-title">
         <h4>Status Perangkat</h4>
         <span class="badge failed">OFFLINE / TIDAK TERHUBUNG</span>
       </div>
-      <p style="color:var(--text-secondary)">Router tidak dapat dihubungi melalui RouterOS API. Pastikan host, kredensial, dan port API sudah benar.</p>
+      <p style="color:var(--text-secondary);margin-bottom:10px">Router tidak dapat dihubungi melalui RouterOS API.</p>
+      <div style="background:var(--bg-app);border-left:3px solid var(--danger);padding:10px 12px;border-radius:var(--radius-sm);font-size:12.5px;line-height:1.5;color:var(--text-primary);margin-bottom:14px">
+        <b>Penyebab Kendala:</b><br/>
+        <span>${esc(errText)}</span>
+      </div>
       <div class="row" style="margin-top:14px">
         <button class="primary" onclick="routerAction('${esc(state.router?.id)}','test')">${icon('zap', '', 13)} Uji Koneksi</button>
         <button onclick="routerAction('${esc(state.router?.id)}','sync')">${icon('refresh-cw', '', 13)} Coba Sync Lagi</button>
+        <button class="ghost" onclick="openRouterForm(state.router)">${icon('edit', '', 13)} Edit Parameter</button>
       </div>
     </div>`;
     return;
