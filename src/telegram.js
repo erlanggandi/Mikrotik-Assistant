@@ -175,11 +175,33 @@ export function getActiveRouterForChat(chatId, defaultRouterId) {
       return r;
     }
   }
-  // 4. If only 1 router registered, auto-select it!
+  // 4. Default to first registered router so user is never blocked from chatting
   const all = db.prepare('SELECT * FROM routers ORDER BY name ASC').all();
-  if (all.length === 1) {
+  if (all.length > 0) {
     setActiveRouterForChat(chatId, all[0].id);
     return all[0];
+  }
+  return null;
+}
+
+export function getActiveAiProvider() {
+  const row = db.prepare('SELECT * FROM ai_providers WHERE active = 1 LIMIT 1').get();
+  if (row) {
+    let key = '';
+    if (row.api_key_enc && row.api_key_iv) {
+      try {
+        key = decryptSecret(row.api_key_enc, row.api_key_iv);
+      } catch {
+        key = '';
+      }
+    }
+    if (!key) key = getSetting('ai_api_key', '') || '';
+    return { baseUrl: row.base_url, apiKey: key, model: row.model, label: row.label };
+  }
+  const baseUrl = getSetting('ai_base_url', '');
+  const model = getSetting('ai_model', '');
+  if (baseUrl && model) {
+    return { baseUrl, apiKey: getSetting('ai_api_key', '') || '', model, label: 'Default' };
   }
   return null;
 }
@@ -228,7 +250,9 @@ export async function handleIncomingMessage(token, msg, allowedChats, defaultRou
   const isMentioned = botUsername ? new RegExp(`@${botUsername}\\b`, 'i').test(rawText) : false;
   const isReplyToBot = Boolean(msg.reply_to_message?.from?.id && botId && msg.reply_to_message.from.id === botId);
   const isCommand = text.startsWith('/');
-  const isDirectedToBot = !isGroup || isCommand || isMentioned || isReplyToBot;
+  // If the group is explicitly whitelisted in allowedChats, treat messages as directed to the assistant
+  const isWhitelistedGroup = isGroup && isChatAllowed(chatId, fromId, allowedChats);
+  const isDirectedToBot = !isGroup || isWhitelistedGroup || isCommand || isMentioned || isReplyToBot;
 
   if (!isChatAllowed(chatId, fromId, allowedChats)) {
     // In group chats, only alert if message was explicitly directed to this bot
@@ -244,7 +268,7 @@ export async function handleIncomingMessage(token, msg, allowedChats, defaultRou
     return;
   }
 
-  // In a group, ignore general chatter among members unless directed to bot
+  // In a non-whitelisted group, ignore general chatter among members unless directed to bot
   if (isGroup && !isDirectedToBot) {
     return;
   }
@@ -535,18 +559,27 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
   // Command: /audit
   if (text === '/audit') {
     await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
-    const ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+    let ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
     if (!ctx) {
-      await sendTelegramMessage(token, chatId, `⚠️ Router *${router.name}* belum memiliki data sinkronisasi. Jalankan \`/sync\` dahulu.`);
-      return;
+      try {
+        await sendTelegramMessage(token, chatId, `⏳ Mengambil data telemetri dari *${router.name}* untuk audit...`);
+        const out = await collectRouter(router);
+        db.prepare(
+          'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
+        ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
+        db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
+        ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+      } catch (e) {
+        await sendTelegramMessage(token, chatId, `⚠️ Gagal sinkronisasi data router: ${e.message || String(e)}`);
+        return;
+      }
     }
 
-    const provRow = db.prepare('SELECT * FROM ai_providers WHERE active = 1 LIMIT 1').get();
-    if (!provRow) {
+    const prov = getActiveAiProvider();
+    if (!prov) {
       await sendTelegramMessage(token, chatId, '⚠️ Provider AI belum dikonfigurasi di web app.');
       return;
     }
-    const apiKey = provRow.api_key_enc ? decryptSecret(provRow.api_key_enc, provRow.api_key_iv) : '';
 
     await sendTelegramMessage(token, chatId, `🔍 *Menjalankan Audit Keamanan Konfigurasi* pada *${router.name}*...\nHarap tunggu sebentar.`);
 
@@ -564,9 +597,9 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
       ];
 
       const report = await chatCompletion({
-        baseUrl: provRow.base_url,
-        apiKey,
-        model: provRow.model,
+        baseUrl: prov.baseUrl,
+        apiKey: prov.apiKey,
+        model: prov.model,
         messages,
         stream: false,
       });
@@ -581,18 +614,27 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
 
   // Free-form Natural Language Chat
   await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
-  const ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+
+  // Auto-sync if router doesn't have context yet
+  let ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
   if (!ctx) {
-    await sendTelegramMessage(token, chatId, `⚠️ Router *${router.name}* belum memiliki data context. Jalankan \`/sync\` dahulu.`);
-    return;
+    try {
+      const out = await collectRouter(router);
+      db.prepare(
+        'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
+      ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
+      db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
+      ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+    } catch (err) {
+      logger.warn({ event: 'telegram_auto_sync_error', error: err.message, routerId: router.id });
+    }
   }
 
-  const provRow = db.prepare('SELECT * FROM ai_providers WHERE active = 1 LIMIT 1').get();
-  if (!provRow) {
-    await sendTelegramMessage(token, chatId, '⚠️ Provider AI belum dikonfigurasi di web app.');
+  const prov = getActiveAiProvider();
+  if (!prov) {
+    await sendTelegramMessage(token, chatId, '⚠️ Provider AI belum dikonfigurasi di web app. Buka menu AI Provider dan atur API Key terlebih dahulu.');
     return;
   }
-  const apiKey = provRow.api_key_enc ? decryptSecret(provRow.api_key_enc, provRow.api_key_iv) : '';
 
   const sessionId = `tg_${chatId}_${router.id}`;
   let chatRow = db.prepare('SELECT id FROM chats WHERE id = ?').get(sessionId);
@@ -612,8 +654,19 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
     .reverse()
     .map((h) => (h.role === 'assistant' ? { ...h, content: stripAdvisoryFooter(h.content) } : h));
 
+  let snapshot = {};
+  let summary = [];
+  let syncedAt = now();
+  if (ctx) {
+    try {
+      snapshot = JSON.parse(ctx.snapshot);
+      summary = JSON.parse(ctx.summary);
+      syncedAt = ctx.synced_at;
+    } catch {}
+  }
+
   try {
-    const digest = buildDigest(JSON.parse(ctx.snapshot), JSON.parse(ctx.summary), ctx.synced_at, {
+    const digest = buildDigest(snapshot, summary, syncedAt, {
       routerName: router.name,
       company: router.company,
       host: router.host,
@@ -631,9 +684,9 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
     );
 
     const aiRes = await chatCompletion({
-      baseUrl: provRow.base_url,
-      apiKey,
-      model: provRow.model,
+      baseUrl: prov.baseUrl,
+      apiKey: prov.apiKey,
+      model: prov.model,
       messages,
       stream: false,
     });
