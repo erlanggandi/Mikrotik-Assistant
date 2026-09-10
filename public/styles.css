@@ -1599,9 +1599,29 @@ input[type="checkbox"] {
 .chat-header-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-weight: 600;
   font-size: 13.5px;
+  flex-wrap: wrap;
+}
+
+.chat-router-select {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  max-width: 280px;
+  transition: border-color 0.15s ease;
+}
+
+.chat-router-select:focus,
+.chat-router-select:hover {
+  border-color: var(--primary);
 }
 
 .chat-header-actions {

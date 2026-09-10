@@ -89,6 +89,11 @@ CREATE TABLE IF NOT EXISTS execution_jobs (
   error TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS telegram_active_routers (
+  chat_id TEXT PRIMARY KEY,
+  router_id TEXT NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_audit_router ON audit_runs(router_id);
 CREATE INDEX IF NOT EXISTS idx_execution_jobs_router ON execution_jobs(router_id);
@@ -132,6 +137,19 @@ export function seedAdmin() {
 function loggerInfo(m) {
   // local convenience to avoid circular import
   console.log(m);
+}
+
+export function getTelegramActiveRouter(chatId) {
+  const row = db.prepare('SELECT router_id FROM telegram_active_routers WHERE chat_id = ?').get(String(chatId));
+  return row ? row.router_id : null;
+}
+
+export function setTelegramActiveRouter(chatId, routerId) {
+  db.prepare(`
+    INSERT INTO telegram_active_routers (chat_id, router_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET router_id = excluded.router_id, updated_at = excluded.updated_at
+  `).run(String(chatId), routerId, now());
 }
 
 export function now() {

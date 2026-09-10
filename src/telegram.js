@@ -1,4 +1,4 @@
-import { db, getSetting, now } from './db.js';
+import { db, getSetting, now, getTelegramActiveRouter, setTelegramActiveRouter } from './db.js';
 import { decryptSecret } from './security.js';
 import { collectRouter } from './collector.js';
 import { RouterOSConnection } from './routeros.js';
@@ -147,22 +147,37 @@ export function isChatAllowed(chatId, fromId, allowedChats) {
   });
 }
 
-function getActiveRouterForChat(chatId, defaultRouterId) {
-  if (activeRouterPerChat.has(chatId)) {
-    const rId = activeRouterPerChat.get(chatId);
+export function setActiveRouterForChat(chatId, routerId) {
+  setTelegramActiveRouter(chatId, routerId);
+  activeRouterPerChat.set(String(chatId), routerId);
+}
+
+export function getActiveRouterForChat(chatId, defaultRouterId) {
+  // 1. Check persistent DB setting for this chat
+  const savedRouterId = getTelegramActiveRouter(chatId);
+  if (savedRouterId) {
+    const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(savedRouterId);
+    if (r) return r;
+  }
+  // 2. Check in-memory map
+  const sChat = String(chatId);
+  if (activeRouterPerChat.has(sChat)) {
+    const rId = activeRouterPerChat.get(sChat);
     const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(rId);
     if (r) return r;
   }
+  // 3. Check configured default router ID from Settings
   if (defaultRouterId) {
     const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(defaultRouterId);
     if (r) {
-      activeRouterPerChat.set(chatId, r.id);
+      setActiveRouterForChat(chatId, r.id);
       return r;
     }
   }
+  // 4. If only 1 router registered, auto-select it!
   const all = db.prepare('SELECT * FROM routers ORDER BY name ASC').all();
   if (all.length === 1) {
-    activeRouterPerChat.set(chatId, all[0].id);
+    setActiveRouterForChat(chatId, all[0].id);
     return all[0];
   }
   return null;
@@ -260,32 +275,59 @@ ${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigura
       return;
     }
     const current = getActiveRouterForChat(chatId, defaultRouterId);
-    let msgList = `📡 *Daftar Router MikroTik (${routers.length}):*\n\n`;
-    for (const r of routers) {
-      const isCur = current && current.id === r.id;
-      const statusIcon = r.connection_status === 'ok' ? '🟢' : r.connection_status === 'failed' ? '🔴' : '🟡';
-      msgList += `${statusIcon} *${r.name}* ${isCur ? '_(AKTIF)_' : ''}\n`;
-      msgList += `   Host: \`${r.host}\` · Komp: ${r.company || '—'}\n`;
-      msgList += `   Pilih: \`/use ${r.name}\`\n\n`;
-    }
-    await sendTelegramMessage(token, chatId, msgList);
+    let msgList = `📡 *Pilih Router MikroTik untuk Sesi Chat:*\n`;
+    msgList += `Router Aktif Saat Ini: ${current ? `*${current.name}* (\`${current.host}\`)` : '_Belum dipilih_'}\n\n`;
+    msgList += `Klik tombol router di bawah ini untuk langsung memilih router target:`;
+
+    const inline_keyboard = routers.map((r) => [
+      {
+        text: `${r.connection_status === 'ok' ? '🟢' : '🔴'} ${r.name} (${r.host})${current?.id === r.id ? ' ✅ (Aktif)' : ''}`,
+        callback_data: `use:${r.id}`,
+      },
+    ]);
+
+    await sendTelegramMessage(token, chatId, msgList, { replyMarkup: { inline_keyboard } });
     return;
   }
 
   // Command: /use <query>
   if (text.startsWith('/use')) {
     const query = text.replace(/^\/use\s*/i, '').trim();
+    const routers = db.prepare('SELECT * FROM routers ORDER BY name ASC').all();
+    if (!routers.length) {
+      await sendTelegramMessage(token, chatId, '⚠️ Belum ada router terdaftar di aplikasi.');
+      return;
+    }
     if (!query) {
-      await sendTelegramMessage(token, chatId, '⚠️ Format perintah: `/use <nama_router_atau_id>`\nContoh: `/use CCR-Kantor`');
+      const inline_keyboard = routers.map((r) => [
+        {
+          text: `${r.connection_status === 'ok' ? '🟢' : '🔴'} ${r.name} (${r.host})`,
+          callback_data: `use:${r.id}`,
+        },
+      ]);
+      await sendTelegramMessage(token, chatId, '⚠️ Silakan klik salah satu tombol router berikut untuk dijadikan router aktif:', {
+        replyMarkup: { inline_keyboard },
+      });
       return;
     }
-    const routers = db.prepare('SELECT * FROM routers').all();
-    const match = routers.find((r) => r.id === query || r.name.toLowerCase().includes(query.toLowerCase()));
+    const q = query.toLowerCase();
+    const match = routers.find((r) => r.id === query || r.name.toLowerCase() === q || r.name.toLowerCase().includes(q) || r.host.includes(query));
     if (!match) {
-      await sendTelegramMessage(token, chatId, `❌ Router dengan kata kunci "${query}" tidak ditemukan. Gunakan \`/routers\` untuk melihat daftar.`);
+      const inline_keyboard = routers.map((r) => [
+        {
+          text: `${r.connection_status === 'ok' ? '🟢' : '🔴'} ${r.name} (${r.host})`,
+          callback_data: `use:${r.id}`,
+        },
+      ]);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ Router dengan kata kunci "${query}" tidak ditemukan.\nSilakan pilih dari daftar tombol di bawah:`,
+        { replyMarkup: { inline_keyboard } }
+      );
       return;
     }
-    activeRouterPerChat.set(chatId, match.id);
+    setActiveRouterForChat(chatId, match.id);
     await sendTelegramMessage(token, chatId, `✅ Router aktif diatur ke: *${match.name}* (\`${match.host}\`)\nSemua pesan chat sekarang akan menganalisis router ini.`);
     return;
   }
@@ -293,10 +335,22 @@ ${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigura
   // Ensure active router
   const router = getActiveRouterForChat(chatId, defaultRouterId);
   if (!router) {
+    const routers = db.prepare('SELECT id, name, host, connection_status FROM routers ORDER BY name ASC').all();
+    if (!routers.length) {
+      await sendTelegramMessage(token, chatId, '⚠️ Belum ada router terdaftar di aplikasi web. Daftarkan router terlebih dahulu.');
+      return;
+    }
+    const inline_keyboard = routers.map((r) => [
+      {
+        text: `${r.connection_status === 'ok' ? '🟢' : '🔴'} ${r.name} (${r.host})`,
+        callback_data: `use:${r.id}`,
+      },
+    ]);
     await sendTelegramMessage(
       token,
       chatId,
-      '⚠️ Anda belum memilih router aktif. Silakan ketik `/routers` lalu pilih router dengan `/use <nama>`.'
+      '⚠️ *Pilih Router Target:*\nAnda memiliki beberapa router terdaftar. Silakan klik salah satu tombol di bawah untuk memilih router yang ingin di-chat / dianalisis:',
+      { replyMarkup: { inline_keyboard } }
     );
     return;
   }
@@ -530,6 +584,24 @@ export async function handleIncomingCallbackQuery(token, cbQuery, allowedChats) 
 
   if (!isChatAllowed(chatId, fromId, allowedChats)) {
     await answerCallbackQuery(token, queryId, 'Akses ditolak. Anda tidak berwenang.', true);
+    return;
+  }
+
+  if (data.startsWith('use:')) {
+    const routerId = data.slice(4);
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
+    if (!router) {
+      await answerCallbackQuery(token, queryId, 'Router tidak ditemukan.', true);
+      return;
+    }
+    setActiveRouterForChat(chatId, router.id);
+    await answerCallbackQuery(token, queryId, `✅ Aktif: ${router.name}`);
+    await editMessageText(
+      token,
+      chatId,
+      messageId,
+      `✅ *Router Aktif Telah Diatur ke: ${router.name}*\nHost: \`${router.host}:${router.api_port}\` · Komp: ${router.company || '—'}\n\nSekarang Anda dapat:\n• Kirim pertanyaan langsung (AI Copilot)\n• Ketik \`/status\` untuk cek CPU, RAM, Suhu\n• Ketik \`/sync\` untuk sinkronisasi telemetri\n• Ketik \`/audit\` untuk audit keamanan\n• Ketik \`/exec <perintah>\` untuk eksekusi konfigurasi`
+    );
     return;
   }
 

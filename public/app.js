@@ -582,6 +582,9 @@ function renderShell() {
     breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item" onclick="navigate('routers')">Routers</span>`;
     if (r.company) breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item">${esc(r.company)}</span>`;
     breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item active">${esc(r.name)}</span>`;
+  } else if (state.view === 'chat') {
+    breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item active">AI Copilot</span>`;
+    if (r) breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item">${esc(r.name)}</span>`;
   } else if (state.view === 'discover') {
     breadcrumbHtml += ` <span class="breadcrumb-sep">/</span> <span class="breadcrumb-item active">Network Discovery (MNDP)</span>`;
   } else if (state.view === 'config') {
@@ -610,6 +613,9 @@ function renderShell() {
         <button class="nav-item" data-view="routers">
           ${icon('grid', '', 15)} <span>Routers</span>
           <span class="nav-count">${state.routers.length}</span>
+        </button>
+        <button class="nav-item" data-view="chat">
+          ${icon('message-square', '', 15)} <span>AI Copilot</span>
         </button>
 
         <div class="nav-sec">Peralatan Jaringan</div>
@@ -716,6 +722,7 @@ function renderShell() {
   // Render Target View
   if (state.view === 'routers' && state.router) renderRouter();
   else if (state.view === 'routers') renderDashboard();
+  else if (state.view === 'chat') renderStandaloneChat();
   else if (state.view === 'discover') renderDiscover();
   else if (state.view === 'config') renderConfig();
   else if (state.view === 'provider') renderProvider();
@@ -726,6 +733,12 @@ function renderShell() {
 function navigate(viewName) {
   state.view = viewName;
   if (viewName === 'routers') { state.router = null; state.overview = null; }
+  if (viewName === 'chat') {
+    if (!state.router && state.routers && state.routers.length > 0) {
+      state.router = state.routers[0];
+    }
+    state.overview = null;
+  }
   if (viewName === 'config') { state.config = { tpl: null, values: {}, script: null }; }
   renderShell();
 }
@@ -1408,7 +1421,54 @@ let resList = [];
 let mentionMatches = [];
 let mentionIndex = -1;
 
+async function renderStandaloneChat() {
+  const content = document.getElementById('content');
+  if (!state.routers || state.routers.length === 0) {
+    content.innerHTML = `
+      <div class="card" style="padding:48px 24px;text-align:center;">
+        <div style="font-size:36px;margin-bottom:12px;">🔌</div>
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:6px;">Belum Ada Router Terdaftar</h3>
+        <p class="muted" style="margin:0 auto 16px;max-width:400px;font-size:13px;">Tambahkan router MikroTik terlebih dahulu untuk mulai berkonsultasi dengan AI Copilot.</p>
+        <button class="primary" onclick="openRouterForm()">${icon('plus', '', 14)} Tambah Router</button>
+      </div>`;
+    return;
+  }
+
+  if (!state.router) {
+    state.router = state.routers[0];
+  }
+
+  content.innerHTML = `
+    <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div>
+        <h2 style="margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px;">
+          ${icon('message-square', 'blue', 18)} AI Copilot Konsultasi Router
+        </h2>
+        <p class="muted" style="margin:3px 0 0;font-size:12.5px;">Tanya jawab, analisis konfigurasi, dan diagnosis cerdas router MikroTik Anda.</p>
+      </div>
+    </div>
+    <div id="standalone-chat-body"></div>`;
+
+  const body = document.getElementById('standalone-chat-body');
+  await renderChatTab(body);
+}
+
 async function renderChatTab(body) {
+  if (!state.router) {
+    if (state.routers && state.routers.length > 0) {
+      state.router = state.routers[0];
+    } else {
+      body.innerHTML = `
+        <div class="card" style="padding:48px 24px;text-align:center;">
+          <div style="font-size:36px;margin-bottom:12px;">🔌</div>
+          <h3 style="font-size:16px;font-weight:600;margin-bottom:6px;">Belum Ada Router Terdaftar</h3>
+          <p class="muted" style="margin:0 auto 16px;max-width:400px;font-size:13px;">Tambahkan router MikroTik terlebih dahulu untuk mulai menggunakan AI Copilot.</p>
+          <button class="primary" onclick="openRouterForm()">${icon('plus', '', 14)} Tambah Router</button>
+        </div>`;
+      return;
+    }
+  }
+
   let chatList = [];
   try {
     chatList = await api(`/api/routers/${state.router.id}/chats`);
@@ -1425,8 +1485,11 @@ async function renderChatTab(body) {
       <div class="chat-header">
         <div class="chat-header-title">
           ${icon('zap', '', 16)}
-          <span>AI Copilot: ${esc(state.router.name)}</span>
-          <span class="badge lvl-info" style="margin-left:6px">Read-Only</span>
+          <span style="font-weight:600">AI Copilot:</span>
+          <select id="chat-router-switcher" class="chat-router-select" title="Pilih router target untuk AI Copilot">
+            ${(state.routers || []).map((r) => `<option value="${esc(r.id)}" ${r.id === state.router.id ? 'selected' : ''}>${esc(r.name)}${r.company ? ` (${esc(r.company)})` : ''}</option>`).join('')}
+          </select>
+          <span class="badge lvl-info">Read-Only</span>
         </div>
         <div class="chat-header-actions">
           <button class="btn-sm" id="chat-new-btn">${icon('plus', '', 12)} Percakapan Baru</button>
@@ -1445,6 +1508,28 @@ async function renderChatTab(body) {
         </div>
       </div>
     </div>`;
+
+  // Bind Switcher
+  const switcher = document.getElementById('chat-router-switcher');
+  if (switcher) {
+    switcher.onchange = async (e) => {
+      const selectedId = e.target.value;
+      const target = (state.routers || []).find((r) => r.id === selectedId);
+      if (target) {
+        state.router = target;
+        state.overview = null;
+        state.chat = null;
+        state.messages = [];
+        await loadOverview();
+        if (state.view === 'chat') {
+          await renderStandaloneChat();
+        } else {
+          routerTab = 'chat';
+          renderRouter();
+        }
+      }
+    };
+  }
 
   // Bind Header Controls
   document.getElementById('chat-new-btn').onclick = async () => {
