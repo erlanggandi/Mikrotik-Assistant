@@ -1,11 +1,20 @@
 export function containsWriteCommands(text = '') {
-  return /(^|\n)\/\S+\/(add|set|remove|enable|disable|reset|reboot)\b/i.test(text) || /\b(system reboot|reset-configuration)\b/i.test(text);
+  if (!text) return false;
+  if (/\b(system reboot|reset-configuration)\b/i.test(text)) return true;
+  const lines = String(text).split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('/') && /\b(add|set|remove|enable|disable|reset|reboot)\b/i.test(trimmed)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const ADVISORY_FOOTER =
-  '\n\n---\nCatatan: Output ini bersifat KONSULTATIF. AI MikroTik Assistant beroperasi read-only dan tidak pernah mengeksekusi atau mengubah konfigurasi router. Jika ada command RouterOS di atas, tinjau dampak, dependensi, dan risiko terlebih dahulu, lalu jalankan manual di router.';
+  '\n\n---\nCatatan: Output ini bersifat KONSULTATIF. Jika ada command RouterOS di atas, tinjau dampak dan risikonya, lalu eksekusi via tombol approval atau jalankan manual di router.';
 
-const FOOTER_ANCHOR = '\n\n---\nCatatan: Output ini bersifat KONSULTATIF.';
+const FOOTER_ANCHOR = '\n\n---\nCatatan: Output ini bersifat KONSULTATIF';
 
 export function stripAdvisoryFooter(content) {
   const idx = String(content).indexOf(FOOTER_ANCHOR);

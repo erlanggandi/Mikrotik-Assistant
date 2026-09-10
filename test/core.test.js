@@ -17,7 +17,7 @@ import { containsWriteCommands, guardOutput } from '../src/guard.js';
 import { normalizeChatUrl } from '../src/llm.js';
 import { buildDigest, buildMessages, isStale } from '../src/orchestrator.js';
 import { normalizeRows } from '../src/collector.js';
-import { splitTelegramMessage, isChatAllowed } from '../src/telegram.js';
+import { splitTelegramMessage, isChatAllowed, normalizeTelegramCommand } from '../src/telegram.js';
 
 test('frame length roundtrip at boundaries', () => {
   for (const len of [0, 1, 0x7f, 0x80, 0x3fff, 0x4000, 0x1fffff, 0x200000]) {
@@ -95,6 +95,9 @@ test('guard detects and annotates write commands', () => {
   const text = '/ip/firewall/nat/add chain=dstnat ...';
   const out = guardOutput(text);
   assert.equal(containsWriteCommands(text), true);
+  assert.equal(containsWriteCommands('/ip firewall filter add chain=input action=drop'), true);
+  assert.equal(containsWriteCommands('/interface ethernet set ether1 name=WAN'), true);
+  assert.equal(containsWriteCommands('/ip address print'), false);
   assert.deepEqual(JSON.parse(out.flags), { containsWriteCommands: true, readOnly: true });
   assert.ok(out.content.endsWith('manual di router.'));
 });
@@ -192,10 +195,23 @@ test('splitTelegramMessage splits text exceeding max length', () => {
   assert.ok(parts.every((p) => p.length <= 15));
 });
 
-test('isChatAllowed checks whitelist', () => {
-  const allowed = ['12345678', '999888'];
+test('isChatAllowed checks whitelist including negative group chat IDs', () => {
+  const allowed = ['12345678', '999888', '-1001234567890', '-987654'];
   assert.equal(isChatAllowed(12345678, 0, allowed), true);
   assert.equal(isChatAllowed(0, 999888, allowed), true);
+  assert.equal(isChatAllowed(-1001234567890, 111, allowed), true);
+  assert.equal(isChatAllowed('-1001234567890', 111, allowed), true);
+  assert.equal(isChatAllowed(-987654, 0, allowed), true);
+  assert.equal(isChatAllowed(-1009999999999, 333444, allowed), false);
   assert.equal(isChatAllowed(111222, 333444, allowed), false);
   assert.equal(isChatAllowed(12345678, 0, []), false);
+});
+
+test('normalizeTelegramCommand strips @botusername from commands', () => {
+  assert.equal(normalizeTelegramCommand('/status@MyMikrotikBot'), '/status');
+  assert.equal(normalizeTelegramCommand('/routers@My_Bot'), '/routers');
+  assert.equal(normalizeTelegramCommand('/use@MyBot CCR-Kantor'), '/use CCR-Kantor');
+  assert.equal(normalizeTelegramCommand('/help'), '/help');
+  assert.equal(normalizeTelegramCommand('halo bot'), 'halo bot');
+  assert.equal(normalizeTelegramCommand(''), '');
 });

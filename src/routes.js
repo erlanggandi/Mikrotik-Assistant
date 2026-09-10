@@ -213,23 +213,43 @@ app.get('/api/routers', auth, (req, res) => {
   res.json(rows.map(publicRouter));
 });
 
+export function friendlyRouterError(msg, host, port) {
+  const m = String(msg || '').toLowerCase();
+  if (/invalid user name or password|login failed/i.test(m)) {
+    return 'Username atau password router salah. Periksa akun di menu System -> Users pada MikroTik.';
+  }
+  if (/econnrefused/i.test(m)) {
+    return `Koneksi ke port ${port || 8728} pada ${host} ditolak (ECONNREFUSED). Pastikan API MikroTik aktif (/ip service enable api) dan parameter address di service API tidak membatasi IP server ini.`;
+  }
+  if (/etimedout|connect timeout|timeout/i.test(m)) {
+    return `Koneksi ke ${host}:${port || 8728} time out (15s). Pastikan router dapat dihubungi/ping dan port ${port || 8728} diizinkan di /ip firewall filter chain=input.`;
+  }
+  if (/ehostunreach|enetunreach/i.test(m)) {
+    return `Alamat ${host} tidak dapat dijangkau (Network/Host Unreachable). Periksa routing jaringan atau VPN dari server/Docker ke router.`;
+  }
+  if (/connection closed by router/i.test(m)) {
+    return `Koneksi ditutup langsung oleh router. Coba uncheck API-SSL jika tidak menggunakan sertifikat SSL, atau periksa batasan login di MikroTik.`;
+  }
+  return msg;
+}
+
 app.post('/api/routers/test-preflight', auth, async (req, res) => {
-  const { host, api_port = 8728, secure = false, username, password } = req.body || {};
-  if (!host || !username) return res.status(400).json({ error: 'host dan username wajib' });
-  if (!password) return res.status(400).json({ error: 'password wajib diisi untuk tes koneksi' });
+  const { host, api_port = 8728, secure = false, username, password = '' } = req.body || {};
+  if (!host || !username) return res.status(400).json({ error: 'host dan username wajib diisi' });
   const t0 = Date.now();
-  const probe = { host, port: Number(api_port), secure: !!secure, username, password };
+  const probe = { host, port: Number(api_port) || 8728, secure: !!secure, username, password: password || '' };
   try {
     const info = await testConnection(probe);
     logger.info({ event: 'connection_test', operation: 'routers/test-preflight', result: 'success', durationMs: Date.now() - t0, host });
     res.json({ ok: true, ...info });
   } catch (e) {
     const msg = e?.message || String(e);
+    const friendly = friendlyRouterError(msg, host, Number(api_port) || 8728);
     logger.warn({
       event: 'connection_test', operation: 'routers/test-preflight', result: 'failed',
       errorCategory: classifyError(msg), durationMs: Date.now() - t0, host,
     });
-    res.status(502).json({ ok: false, error: msg });
+    res.status(502).json({ ok: false, error: friendly });
   }
 });
 
@@ -296,12 +316,13 @@ app.post('/api/routers/:id/test', auth, async (req, res) => {
     res.json({ ok: true, ...info });
   } catch (e) {
     const msg = e?.message || String(e);
-    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(msg, router.id);
+    const friendly = friendlyRouterError(msg, router.host, router.api_port);
+    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(friendly, router.id);
     logger.warn({
       event: 'connection_test', operation: 'routers/test', result: 'failed', routerId: router.id,
       errorCategory: classifyError(msg), durationMs: Date.now() - t0,
     });
-    res.status(502).json({ ok: false, error: msg });
+    res.status(502).json({ ok: false, error: friendly });
   }
 });
 

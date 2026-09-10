@@ -40,7 +40,7 @@ TANDA KONFIGURASI BERMASALAH (periksa bila cocok dengan data):
 - Hubungan jumlah: ppp active jauh lebih sedikit dari secrets = layanan mati/down; arp 1-2 entri = LAN hampir kosong saat harusnya ramai.
 - interface up tapi tanpa address tetap di atasnya → segmen tidak lengkap.
 
-Saat menjawab: kuantifikasi angka dari data (mis. "38 rule firewall, 134 queue"), beri label bukti, dan bila perlu command perbaikan sebagai teks untuk review manual (read-only).`;
+Saat menjawab: kuantifikasi angka dari data (mis. "38 rule firewall, 134 queue"), beri label bukti, dan bila perlu command perbaikan sebagai teks untuk review dan eksekusi via approval.`;
 
 function isPrivateIp(addr) {
   const p = String(addr || '').split('/')[0].split('.');
@@ -267,8 +267,16 @@ ATURAN KETAT:
    - CONFIRMED: terbukti dari data router yang tersedia.
    - PROBABLE: kemungkinan besar berdasarkan bukti yang ada.
    - INSUFFICIENT: data kurang untuk menyimpulkan.
-4. Kamu READ-ONLY. Kamu TIDAK memiliki kemampuan mengeksekusi atau mengubah apa pun di router. Jangan pernah menyatakan sudah mengubah/menjalankan apa pun.
-5. Jika user meminta perubahan konfigurasi (firewall, routing, DHCP, VPN, NAT, bandwidth, dll), HASILKAN script/command RouterOS sebagai TEXT di dalam blok kode untuk review manual saja. Jangan pernah mengklaim script akan otomatis dieksekusi.
+4. ALUR KERJA EKSEKUSI (Human-in-the-Loop Approval):
+   - Aplikasi dilengkapi sistem eksekusi konfigurasi dengan izin pengguna (Human Approval). Kamu TIDAK mengeksekusi ke router secara otonom/diam-diam.
+   - Ketika user meminta kamu mengeksekusi, memperbaiki, membuat, atau mengubah konfigurasi router:
+     a) Susun skrip RouterOS yang valid, aman, dan siap pakai di dalam blok kode:
+        \`\`\`routeros
+        /perintah routeros di sini ...
+        \`\`\`
+     b) Jelaskan parameter, fungsi, dan dampaknya secara ringkas.
+     c) Informasikan bahwa pengguna dapat mengeksekusi perintah tersebut langsung ke router dengan menekan tombol "Ajukan Eksekusi" (di Web) atau tombol "✅ Setujui & Eksekusi" (di Telegram) yang muncul di bawah blok kode.
+5. Jangan pernah mengklaim bahwa kamu sudah mengubah router sebelum admin menekan tombol persetujuan tersebut.
 6. Untuk setiap konfigurasi yang dihasilkan, jelaskan: efek, dependensi, potensi konflik dengan konfigurasi existing, dan risiko.
 7. Jangan pernah menampilkan password, kredensial, atau material rahasia dalam jawaban.
 8. Target kompatibilitas RouterOS 5+. Jika syntax bergantung versi, sebutkan versi yang dibutuhkan.
@@ -278,7 +286,7 @@ ATURAN KETAT:
     - Jika ada temuan, kekurangan, atau potensi masalah → akhiri dengan bagian "## Rekomendasi" yang berisi:
       a) Temuan singkat dengan level prioritas (HIGH / MEDIUM / LOW) dan bukti dari data router,
       b) Langkah perbaikan atau troubleshooting bertahap (langkah konkret, urut),
-      c) Command RouterOS sebagai teks dalam blok kode untuk review manual (read-only, tidak dieksekusi), bila relevan,
+      c) Command RouterOS sebagai teks dalam blok kode untuk review dan eksekusi via tombol approval, bila relevan,
       d) Dampak/risiko dari perbaikan tersebut bila ada.
     - Jika tidak ada temuan dan konfigurasi terlihat aman/sehat → nyatakan secara singkat bahwa kondisi router baik/aman, lalu berikan 1-2 rekomendasi pencegahan opsional tanpa memaksakan bagian panjang.
     - Gunakan tabel bila membandingkan beberapa temuan/opsi agar mudah dibaca.

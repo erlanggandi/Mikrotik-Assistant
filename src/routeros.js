@@ -332,6 +332,12 @@ export class RouterOSConnection {
       if (onProgress) onProgress({ lineIndex: i, total: lines.length, command: raw });
       try {
         const res = await this.command(words, { allowWrite: true });
+        const trap = res.find((r) => r.words && r.words[0] === '!trap');
+        if (trap) {
+          const errMsg = trapMessage(trap) || 'RouterOS error (!trap)';
+          results.push({ line: raw, ok: false, error: errMsg });
+          return { ok: false, error: `Gagal pada baris: "${raw}". Error: ${errMsg}`, results };
+        }
         results.push({ line: raw, ok: true, output: res.map((r) => r.words.join(' ')).join('\n') });
       } catch (err) {
         const msg = err.message || String(err);

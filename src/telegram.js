@@ -116,11 +116,35 @@ export async function editMessageText(token, chatId, messageId, text, opts = {})
   return res;
 }
 
+let botCache = null;
+
+export async function getBotInfo(token) {
+  if (botCache && botCache.token === token) return botCache.info;
+  try {
+    const res = await telegramApi(token, 'getMe');
+    if (res.ok && res.result) {
+      botCache = { token, info: res.result };
+      return res.result;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function normalizeTelegramCommand(text) {
+  if (!text) return '';
+  return text.trim().replace(/^\/([a-zA-Z0-9_]+)@[a-zA-Z0-9_]+/i, '/$1');
+}
+
 export function isChatAllowed(chatId, fromId, allowedChats) {
   if (!allowedChats || !allowedChats.length) return false;
-  const sChat = String(chatId);
-  const sFrom = String(fromId);
-  return allowedChats.some((a) => a === sChat || a === sFrom);
+  const sChat = String(chatId ?? '').trim();
+  const sFrom = String(fromId ?? '').trim();
+  return allowedChats.some((a) => {
+    const clean = String(a).trim();
+    return clean.length > 0 && (clean === sChat || clean === sFrom);
+  });
 }
 
 function getActiveRouterForChat(chatId, defaultRouterId) {
@@ -156,20 +180,46 @@ function extractScriptFromText(text) {
   return lines;
 }
 
-export async function handleIncomingMessage(token, msg, allowedChats, defaultRouterId) {
+export async function handleIncomingMessage(token, msg, allowedChats, defaultRouterId, botInfo = null) {
   const chatId = msg.chat?.id;
   const fromId = msg.from?.id;
-  const text = (msg.text || '').trim();
+  const chatType = msg.chat?.type || 'private';
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
+  const rawText = (msg.text || '').trim();
+
+  // Normalize command if it contains bot username (e.g. /status@MyBot -> /status)
+  let text = normalizeTelegramCommand(rawText);
+
+  // Check if message is directed to the bot
+  const botUsername = botInfo?.username ? botInfo.username.toLowerCase() : '';
+  const botId = botInfo?.id;
+  const isMentioned = botUsername ? new RegExp(`@${botUsername}\\b`, 'i').test(rawText) : false;
+  const isReplyToBot = Boolean(msg.reply_to_message?.from?.id && botId && msg.reply_to_message.from.id === botId);
+  const isCommand = text.startsWith('/');
+  const isDirectedToBot = !isGroup || isCommand || isMentioned || isReplyToBot;
 
   if (!isChatAllowed(chatId, fromId, allowedChats)) {
-    await sendTelegramMessage(
-      token,
-      chatId,
-      `⛔ *Akses Ditolak*\nChat ID Anda: \`${chatId}\` (User ID: \`${fromId}\`) belum terdaftar di whitelist MikroTik Assistant.\n\nSilakan masukkan Chat ID Anda di menu *Keamanan & Akun -> Integrasi Telegram* pada web app.`,
-      { parseMode: 'Markdown' }
-    );
-    logger.warn({ event: 'telegram_auth_rejected', chatId, fromId });
+    // In group chats, only alert if message was explicitly directed to this bot
+    if (isDirectedToBot) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⛔ *Akses Ditolak*\nChat ID: \`${chatId}\`\nUser ID: \`${fromId}\`\n\nID ini belum terdaftar di whitelist MikroTik Assistant.\nSilakan daftarkan di menu *Keamanan & Akun -> Integrasi Telegram* pada web app.`,
+        { parseMode: 'Markdown' }
+      );
+      logger.warn({ event: 'telegram_auth_rejected', chatId, fromId, chatType });
+    }
     return;
+  }
+
+  // In a group, ignore general chatter among members unless directed to bot
+  if (isGroup && !isDirectedToBot) {
+    return;
+  }
+
+  // Strip mention from question if mentioned in group
+  if (isMentioned && botUsername) {
+    text = text.replace(new RegExp(`@${botUsername}\\b`, 'gi'), '').trim();
   }
 
   if (!text) return;
@@ -183,12 +233,13 @@ Selamat datang! Anda dapat memantau router, menjalankan audit, dan berdiskusi de
 *Router Aktif:* ${active ? `*${active.name}* (${active.host})` : '_Belum ada router terpilih_'}
 
 📌 *Daftar Perintah:*
-• \`/routers\` — Daftar seluruh router terdaftar & status
-• \`/use <nama/id>\` — Pilih router yang aktif
-• \`/status\` — Cek telemetri hardware (CPU, RAM, Suhu, Uptime)
-• \`/sync\` — Tarik data telemetri terbaru seketika
-• \`/audit\` — Jalankan audit keamanan konfigurasi
-• \`/help\` — Tampilkan pesan panduan ini
+• `/routers` — Daftar seluruh router terdaftar & status
+• `/use <nama/id>` — Pilih router yang aktif
+• `/status` — Cek telemetri hardware (CPU, RAM, Suhu, Uptime)
+• `/sync` — Tarik data telemetri terbaru seketika
+• `/audit` — Jalankan audit keamanan konfigurasi
+• `/exec <perintah>` — Ajukan eksekusi perintah RouterOS langsung
+• `/help` — Tampilkan pesan panduan ini
 
 💬 *Chat Bebas (AI Copilot):*
 Ketik langsung pertanyaan atau permintaan Anda, contoh:
@@ -247,6 +298,53 @@ ${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigura
       chatId,
       '⚠️ Anda belum memilih router aktif. Silakan ketik `/routers` lalu pilih router dengan `/use <nama>`.'
     );
+    return;
+  }
+
+  // Command: /exec <commands...>
+  if (text.startsWith('/exec')) {
+    const rawCmds = text.replace(/^\/exec\s*/i, '').trim();
+    if (!rawCmds) {
+      await sendTelegramMessage(token, chatId, '⚠️ Format perintah: `/exec <perintah_routeros>`\nContoh:\n`/exec /ip service disable telnet`');
+      return;
+    }
+    if (!isExecutionEnabled()) {
+      await sendTelegramMessage(token, chatId, '🛡️ *Mode Eksekusi Nonaktif*\nEksekusi saat ini dinonaktifkan di menu Pengaturan Web App.');
+      return;
+    }
+    const lines = rawCmds.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    if (!lines.length) {
+      await sendTelegramMessage(token, chatId, '⚠️ Tidak ada baris perintah yang valid.');
+      return;
+    }
+
+    const job = createExecutionJob({
+      routerId: router.id,
+      source: 'telegram',
+      commands: lines,
+      requestedBy: msg.from?.username ? `@${msg.from.username}` : `User ${fromId}`,
+    });
+
+    const approvalPrompt = `⚡ *Konfirmasi Eksekusi Perintah*
+Target Router: *${router.name}* (\`${router.host}\`)
+Diajukan oleh: ${msg.from?.username ? `@${msg.from.username}` : `User ${fromId}`}
+
+\`\`\`routeros
+${lines.slice(0, 5).join('\n')}${lines.length > 5 ? `\n...dan ${lines.length - 5} baris lainnya` : ''}
+\`\`\`
+
+Apakah Anda menyetujui perintah ini dieksekusi di router?`;
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          { text: '✅ Setujui & Eksekusi', callback_data: `job:app:${job.id}` },
+          { text: '❌ Batalkan', callback_data: `job:rej:${job.id}` },
+        ],
+      ],
+    };
+
+    await sendTelegramMessage(token, chatId, approvalPrompt, { replyMarkup });
     return;
   }
 
@@ -502,6 +600,11 @@ export async function pollUpdates(token, allowedChats, defaultRouterId) {
   let offset = 0;
   logger.info({ event: 'telegram_bot_started', operation: 'telegram', result: 'listening' });
 
+  const botInfo = await getBotInfo(token);
+  if (botInfo) {
+    logger.info({ event: 'telegram_bot_identity', username: botInfo.username, id: botInfo.id });
+  }
+
   while (pollingActive) {
     try {
       const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent(
@@ -531,7 +634,7 @@ export async function pollUpdates(token, allowedChats, defaultRouterId) {
       for (const update of data.result) {
         offset = Math.max(offset, update.update_id + 1);
         if (update.message) {
-          handleIncomingMessage(token, update.message, allowedChats, defaultRouterId).catch((err) => {
+          handleIncomingMessage(token, update.message, allowedChats, defaultRouterId, botInfo).catch((err) => {
             logger.warn({ event: 'telegram_message_error', error: err.message });
           });
         } else if (update.callback_query) {

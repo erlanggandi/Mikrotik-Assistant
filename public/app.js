@@ -502,7 +502,7 @@ function renderLogin() {
         <div class="login-brand-icon">${icon('router', '', 24)}</div>
         <div>
           <h1>AI MikroTik Assistant</h1>
-          <p>Read-only Network Management Console</p>
+          <p>Network Operations &amp; AI Copilot Console</p>
         </div>
       </div>
       <form id="login-form" onsubmit="return false;">
@@ -602,7 +602,7 @@ function renderShell() {
         <div class="brand-icon">${icon('router', '', 20)}</div>
         <div class="brand-info">
           <h2>MikroTik Assistant</h2>
-          <span class="brand-badge">v0.1 · Read-Only</span>
+          <span class="brand-badge">v0.2 · AI Copilot</span>
         </div>
       </div>
       <nav class="nav">
@@ -1054,14 +1054,21 @@ function openRouterForm(existing) {
       <input id="f-user" value="${esc(r.username || '')}" placeholder="admin" autocomplete="off" required />
 
       <label>Password API ${r.id ? '<small class="cell-muted">(kosongkan jika tidak diubah)</small>' : ''}</label>
-      <input id="f-pass" type="password" autocomplete="new-password" placeholder="••••••••" />
+      <input id="f-pass" type="password" autocomplete="new-password" placeholder="kosongkan jika router tanpa password" />
 
-      <div id="router-form-msg"></div>
+      <div style="margin-top:10px;font-size:11.5px;color:var(--text-secondary);background:var(--bg-app);padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);line-height:1.5">
+        💡 <b>Catatan Koneksi MikroTik API:</b><br/>
+        • Pastikan API aktif di router: <code>/ip service enable api</code> (port 8728).<br/>
+        • Pastikan firewall tidak memblokir: <code>/ip firewall filter add chain=input protocol=tcp dst-port=8728 action=accept place-before=1</code>.<br/>
+        • Jika memakai Docker di Ubuntu, pastikan host/IP router dapat di-ping dari server.
+      </div>
+
+      <div id="router-form-msg" style="margin-top:10px"></div>
     </div>
     <div class="dialog-actions">
       <button class="ghost" id="f-cancel">Batal</button>
-      <button class="primary" id="f-test">${icon('zap', '', 13)} Tes Koneksi</button>
-      <button class="primary" id="f-save" ${r.id ? '' : 'disabled'}>${icon('check', '', 13)} Simpan</button>
+      <button class="ghost" id="f-test">${icon('zap', '', 13)} Tes Koneksi</button>
+      <button class="primary" id="f-save">${icon('check', '', 13)} Simpan</button>
     </div>
   </div>`;
 
@@ -1094,31 +1101,31 @@ function openRouterForm(existing) {
     showMsg('router-form-msg', 'Menghubungkan ke MikroTik API...', '');
     try {
       const res = await api('/api/routers/test-preflight', { method: 'POST', body: formData() });
-      showMsg('router-form-msg', `Koneksi Berhasil! Terdeteksi RouterOS ${esc(res.version)} · Board ${esc(res.boardName || '-')}`, 'ok');
-      saveBtn.disabled = false;
+      showMsg('router-form-msg', `✅ Koneksi Berhasil! Terdeteksi RouterOS ${esc(res.version)} · Board ${esc(res.boardName || '-')}`, 'ok');
     } catch (e) {
-      showMsg('router-form-msg', `Koneksi Gagal: ${esc(e.message)}`, 'err');
-      saveBtn.disabled = true;
+      showMsg('router-form-msg', `❌ ${esc(e.message)}`, 'err');
     }
     testBtn.disabled = false;
     testBtn.innerHTML = `${icon('zap', '', 13)} Tes Koneksi`;
   };
 
   saveBtn.onclick = async () => {
+    const body = {
+      name: mask.querySelector('#f-name').value.trim(),
+      company: mask.querySelector('#f-company').value.trim(),
+      host: mask.querySelector('#f-host').value.trim(),
+      api_port: Number(mask.querySelector('#f-port').value || 8728),
+      secure: mask.querySelector('#f-secure').checked,
+      username: mask.querySelector('#f-user').value.trim(),
+      password: mask.querySelector('#f-pass').value,
+    };
+    if (!body.name || !body.host || !body.username) {
+      showMsg('router-form-msg', 'Nama, Host/IP, dan Username wajib diisi.', 'err');
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = `${icon('refresh-cw', '', 13)} Menyimpan...`;
     try {
-      const body = {
-        name: mask.querySelector('#f-name').value.trim(),
-        company: mask.querySelector('#f-company').value.trim(),
-        host: mask.querySelector('#f-host').value.trim(),
-        api_port: Number(mask.querySelector('#f-port').value || 8728),
-        secure: mask.querySelector('#f-secure').checked,
-        username: mask.querySelector('#f-user').value.trim(),
-        password: mask.querySelector('#f-pass').value,
-      };
-      if (!body.name || !body.host || !body.username) {
-        showMsg('router-form-msg', 'Nama, Host, dan Username wajib diisi.', 'err');
-        return;
-      }
       if (r.id) await api(`/api/routers/${r.id}`, { method: 'PUT', body });
       else await api('/api/routers', { method: 'POST', body });
       close();
@@ -1130,6 +1137,8 @@ function openRouterForm(existing) {
       showToast('Data router berhasil disimpan', 'ok');
     } catch (e) {
       showMsg('router-form-msg', e.message, 'err');
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = `${icon('check', '', 13)} Simpan`;
     }
   };
 }
@@ -2566,9 +2575,9 @@ async function renderSettings() {
       <label>HTTP API Token Bot Telegram (dari @BotFather)</label>
       <input id="tg-token" type="password" placeholder="${tgSetting.tokenPreview ? 'Tersimpan: ' + tgSetting.tokenPreview : '7123456789:AAH...'}" />
 
-      <label style="margin-top:10px">Whitelist Chat ID / User ID (Dipisahkan koma)</label>
-      <input id="tg-chats" type="text" placeholder="Contoh: 123456789, 987654321" value="${esc(tgSetting.allowedChats || '')}" />
-      <p class="cell-muted" style="font-size:11.5px;margin-top:2px">Hanya akun dengan ID di atas yang dapat berinteraksi dan menyetujui eksekusi via Telegram.</p>
+      <label style="margin-top:10px">Whitelist Chat ID / Group ID (Dipisahkan koma)</label>
+      <input id="tg-chats" type="text" placeholder="Contoh: 123456789, -1001234567890" value="${esc(tgSetting.allowedChats || '')}" />
+      <p class="cell-muted" style="font-size:11.5px;margin-top:2px">ID Pribadi (angka positif, misal <code>123456789</code>) atau ID Grup (angka minus, misal <code>-1001234567890</code>). Tanda minus <b>-</b> wajib disertakan.</p>
 
       <label style="margin-top:10px">Router Default Sesi Chat</label>
       <select id="tg-def-router">
@@ -2584,13 +2593,18 @@ async function renderSettings() {
       </div>
 
       <details style="margin-top:16px;font-size:12.5px;color:var(--text-secondary);background:var(--bg-app);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle)">
-        <summary style="cursor:pointer;font-weight:600;color:var(--primary)">📖 Panduan Membuat Bot Telegram (3 Menit)</summary>
+        <summary style="cursor:pointer;font-weight:600;color:var(--primary)">📖 Panduan Penggunaan &amp; Chat ID Grup / Akun Pribadi</summary>
         <ol style="margin:8px 0 0 16px;padding:0;line-height:1.7">
-          <li>Buka Telegram, cari <b>@BotFather</b> lalu ketik <code>/newbot</code>.</li>
-          <li>Masukkan nama bot dan username (misal: <code>my_mikrotik_bot</code>). Salin Token API yang diberikan.</li>
-          <li>Cari bot <b>@userinfobot</b> di Telegram untuk melihat <b>Chat ID</b> angka Anda (contoh: <code>123456789</code>).</li>
-          <li>Ketik <code>/start</code> ke bot yang baru Anda buat agar bot dapat mengirim pesan ke Anda.</li>
-          <li>Masukkan Token &amp; Chat ID pada kolom di atas, lalu klik <b>Simpan &amp; Aktifkan</b>.</li>
+          <li><b>Buat Bot:</b> Buka Telegram, cari <b>@BotFather</b> lalu ketik <code>/newbot</code>. Salin Token API yang diberikan.</li>
+          <li><b>Chat ID Pribadi:</b> Cari bot <b>@userinfobot</b> di Telegram untuk melihat <b>ID</b> angka Anda (contoh: <code>123456789</code>).</li>
+          <li><b>Chat ID Grup (Tanda Minus):</b>
+            <div style="margin-top:2px">
+              • ID grup Telegram selalu diawali tanda minus <code>-</code> (grup standar) atau <code>-100</code> (supergroup), contoh: <code>-1001987654321</code>.<br/>
+              • <i>Cara dapat ID grup:</i> Masukkan bot <b>@RawDataBot</b> ke grup Anda, salin nilai <code>chat -&gt; id</code> yang bernilai minus, lalu keluarkan kembali bot tersebut.<br/>
+              • <i>Setting BotFather untuk Grup:</i> Buka <b>@BotFather</b> &rarr; ketik <code>/mybots</code> &rarr; pilih bot Anda &rarr; <b>Bot Settings</b> &rarr; <b>Group Privacy</b> &rarr; <b>Turn off</b> (Disabled) agar bot bisa merespons chat anggota di grup.
+            </div>
+          </li>
+          <li><b>Uji Coba:</b> Masukkan token &amp; ID di atas (bisa dipisah koma jika ada beberapa ID), lalu klik <b>Simpan</b> dan <b>Tes Bot</b>.</li>
         </ol>
       </details>
     </div>
