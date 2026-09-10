@@ -17,7 +17,7 @@ import { containsWriteCommands, guardOutput } from '../src/guard.js';
 import { normalizeChatUrl } from '../src/llm.js';
 import { buildDigest, buildMessages, isStale } from '../src/orchestrator.js';
 import { normalizeRows } from '../src/collector.js';
-import { splitTelegramMessage, isChatAllowed, normalizeTelegramCommand } from '../src/telegram.js';
+import { splitTelegramMessage, isChatAllowed, normalizeTelegramCommand, extractScriptFromText } from '../src/telegram.js';
 
 test('frame length roundtrip at boundaries', () => {
   for (const len of [0, 1, 0x7f, 0x80, 0x3fff, 0x4000, 0x1fffff, 0x200000]) {
@@ -214,4 +214,29 @@ test('normalizeTelegramCommand strips @botusername from commands', () => {
   assert.equal(normalizeTelegramCommand('/help'), '/help');
   assert.equal(normalizeTelegramCommand('halo bot'), 'halo bot');
   assert.equal(normalizeTelegramCommand(''), '');
+});
+
+test('cliToApiSentence maps positional arguments after action verbs', () => {
+  const disableWords = cliToApiSentence('/ip service disable telnet');
+  assert.deepEqual(disableWords, ['/ip/service/disable', '=numbers=telnet']);
+
+  const etherWords = cliToApiSentence('/interface ethernet disable ether5');
+  assert.deepEqual(etherWords, ['/interface/ethernet/disable', '=numbers=ether5']);
+
+  const setWords = cliToApiSentence('/interface set ether1 name=LAN');
+  assert.deepEqual(setWords, ['/interface/set', '=numbers=ether1', '=name=LAN']);
+});
+
+test('extractScriptFromText extracts RouterOS commands from various markdown blocks', () => {
+  const text1 = 'Berikut perbaikan:\n```routeros\n/ip service disable telnet\n```\nSelesai.';
+  assert.deepEqual(extractScriptFromText(text1), ['/ip service disable telnet']);
+
+  const text2 = 'Jalankan perintah ini:\n```mikrotik\n/ip firewall filter add chain=input action=drop\n```';
+  assert.deepEqual(extractScriptFromText(text2), ['/ip firewall filter add chain=input action=drop']);
+
+  const text3 = 'Berikut skripnya:\n```\n/queue simple add name=Limit-User max-limit=10M/10M\n```';
+  assert.deepEqual(extractScriptFromText(text3), ['/queue simple add name=Limit-User max-limit=10M/10M']);
+
+  const text4 = 'Teks biasa tanpa blok kode:\n/ip dns set allow-remote-requests=no\nBisa dijalankan.';
+  assert.deepEqual(extractScriptFromText(text4), ['/ip dns set allow-remote-requests=no']);
 });

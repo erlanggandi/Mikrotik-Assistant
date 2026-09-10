@@ -4,7 +4,8 @@ export function containsWriteCommands(text = '') {
   const lines = String(text).split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('/') && /\b(add|set|remove|enable|disable|reset|reboot)\b/i.test(trimmed)) {
+    if ((trimmed.startsWith('/') || /^(add|set|remove|enable|disable|reset)\b/i.test(trimmed)) &&
+        /\b(add|set|remove|enable|disable|reset|reboot)\b/i.test(trimmed)) {
       return true;
     }
   }

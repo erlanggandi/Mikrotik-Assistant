@@ -109,6 +109,8 @@ export function isDestructiveCommand(words) {
   return BLOCKED_DESTRUCTIVE.some((re) => re.test(cmd));
 }
 
+const ACTION_VERBS = new Set(['add', 'set', 'remove', 'enable', 'disable', 'reset', 'print', 'get', 'export', 'move', 'comment', 'reboot']);
+
 export function cliToApiSentence(line) {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return null;
@@ -128,9 +130,17 @@ export function cliToApiSentence(line) {
       } else {
         const subParts = tok.split('/').filter(Boolean);
         pathParts.push(...subParts);
+        const lastPart = pathParts[pathParts.length - 1]?.toLowerCase();
+        if (ACTION_VERBS.has(lastPart)) {
+          isCollectingPath = false;
+        }
       }
     } else {
-      attrTokens.push(tok);
+      if (tok.includes('=')) {
+        attrTokens.push(tok);
+      } else {
+        attrTokens.push(`numbers=${tok}`);
+      }
     }
   }
 

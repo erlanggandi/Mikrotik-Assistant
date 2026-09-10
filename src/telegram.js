@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { db, getSetting, now, getTelegramActiveRouter, setTelegramActiveRouter } from './db.js';
 import { decryptSecret } from './security.js';
 import { collectRouter } from './collector.js';
 import { RouterOSConnection } from './routeros.js';
 import { chatCompletion } from './llm.js';
 import { buildDigest, buildMessages, securityAuditPrompt } from './orchestrator.js';
-import { guardOutput, containsWriteCommands } from './guard.js';
+import { guardOutput, containsWriteCommands, stripAdvisoryFooter } from './guard.js';
 import { isExecutionEnabled, createExecutionJob, getExecutionJob, approveAndExecuteJob, rejectExecutionJob } from './jobs.js';
 import { logger } from './logger.js';
 
@@ -183,16 +184,32 @@ export function getActiveRouterForChat(chatId, defaultRouterId) {
   return null;
 }
 
-function extractScriptFromText(text) {
-  const m = text.match(/```(?:routeros)?\n?([\s\S]*?)```/i);
-  if (m) {
-    return m[1]
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('#'));
+export function extractScriptFromText(text) {
+  if (!text) return [];
+  // Match all markdown code blocks (routeros, rsc, mikrotik, bash, sh, or unlabelled)
+  const blockRegex = /```(?:routeros|rsc|mikrotik|bash|sh)?\r?\n([\s\S]*?)```/gi;
+  const cmds = [];
+  let match;
+  while ((match = blockRegex.exec(text)) !== null) {
+    const lines = match[1].split('\n');
+    for (let l of lines) {
+      l = l.trim();
+      if (l && !l.startsWith('#') && (l.startsWith('/') || /^(add|set|remove|enable|disable|reset|print)\b/i.test(l))) {
+        cmds.push(l);
+      }
+    }
   }
-  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/'));
-  return lines;
+  if (cmds.length) return cmds;
+
+  // Fallback: plain text lines that start with '/'
+  const lines = text.split('\n');
+  for (let l of lines) {
+    l = l.trim();
+    if (l.startsWith('/') && !l.startsWith('//') && !l.startsWith('/*')) {
+      cmds.push(l);
+    }
+  }
+  return cmds;
 }
 
 export async function handleIncomingMessage(token, msg, allowedChats, defaultRouterId, botInfo = null) {
@@ -248,22 +265,36 @@ Selamat datang! Anda dapat memantau router, menjalankan audit, dan berdiskusi de
 *Router Aktif:* ${active ? `*${active.name}* (${active.host})` : '_Belum ada router terpilih_'}
 
 📌 *Daftar Perintah:*
-• `/routers` — Daftar seluruh router terdaftar & status
-• `/use <nama/id>` — Pilih router yang aktif
-• `/status` — Cek telemetri hardware (CPU, RAM, Suhu, Uptime)
-• `/sync` — Tarik data telemetri terbaru seketika
-• `/audit` — Jalankan audit keamanan konfigurasi
-• `/exec <perintah>` — Ajukan eksekusi perintah RouterOS langsung
-• `/help` — Tampilkan pesan panduan ini
+• \`/routers\` — Daftar router & pilih target dengan tombol interaktif
+• \`/status\` — Cek telemetri hardware (CPU, RAM, Suhu, Uptime)
+• \`/sync\` — Tarik data telemetri terbaru seketika
+• \`/audit\` — Jalankan audit keamanan konfigurasi
+• \`/clear\` atau \`/reset\` — Bersihkan riwayat percakapan router aktif
+• \`/help\` — Tampilkan pesan panduan ini
 
-💬 *Chat Bebas (AI Copilot):*
-Ketik langsung pertanyaan atau permintaan Anda, contoh:
-- _"Cek apakah ada rule firewall drop brute force?"_
-- _"Blok IP 192.168.1.50 di interface WAN"_
-- _"Kenapa pemakaian memori tinggi?"_
+💬 *Chat Bebas (Bahasa Alami):*
+Ketik langsung pertanyaan atau perintah dalam bahasa sehari-hari. *Tidak perlu mengetik sintaks /exec manual!* AI akan otomatis menerjemahkannya dan meminta konfirmasi Anda sebelum dieksekusi.
+Contoh:
+- _"Tolong matikan service telnet biar aman"_
+- _"Buat limit bandwidth 10 Mbps untuk IP 192.168.1.50"_
+- _"Cek kenapa CPU load tinggi?"_
+- _"Blokir port 23 di firewall input"_
 
-${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigurasi memerlukan konfirmasi tombol approval Anda).' : '🛡️ *Mode Eksekusi:* NONAKTIF (Hanya konsultatif / Read-only).'}`;
+${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigurasi memerlukan konfirmasi Anda lewat tombol approval atau cukup balas "eksekusi").' : '🛡️ *Mode Eksekusi:* NONAKTIF (Hanya konsultatif / Read-only).'}`;
     await sendTelegramMessage(token, chatId, helpMsg);
+    return;
+  }
+
+  // Command: /clear or /reset
+  if (text === '/clear' || text === '/reset') {
+    const active = getActiveRouterForChat(chatId, defaultRouterId);
+    if (active) {
+      const sessionId = `tg_${chatId}_${active.id}`;
+      db.prepare('DELETE FROM messages WHERE chat_id = ?').run(sessionId);
+      await sendTelegramMessage(token, chatId, `🗑️ Riwayat percakapan untuk router *${active.name}* telah dibersihkan.`);
+    } else {
+      await sendTelegramMessage(token, chatId, '⚠️ Belum ada router aktif terpilih.');
+    }
     return;
   }
 
@@ -353,6 +384,51 @@ ${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigura
       { replyMarkup: { inline_keyboard } }
     );
     return;
+  }
+
+  // Conversational text approval or rejection of pending execution job
+  const cleanInput = text.trim().toLowerCase();
+  const isApprovalIntent = /^(ya|setuju|eksekusi|jalankan|approve|oke|ok|lanjutkan|yes|confirm|terapkan|apply)\b/i.test(cleanInput);
+  const isRejectIntent = /^(batal|batalkan|jangan|cancel|reject|tidak|tolak)\b/i.test(cleanInput);
+
+  if (isApprovalIntent || isRejectIntent) {
+    const pendingJob = db.prepare(`
+      SELECT * FROM execution_jobs 
+      WHERE router_id = ? AND source = 'telegram' AND status = 'pending' 
+      ORDER BY created_at DESC LIMIT 1
+    `).get(router.id);
+
+    if (pendingJob) {
+      const userLabel = msg.from?.username ? `@${msg.from.username}` : (msg.from?.first_name || String(fromId));
+      if (isRejectIntent) {
+        rejectExecutionJob(pendingJob.id, { rejectedBy: `Telegram:${userLabel}` });
+        await sendTelegramMessage(token, chatId, `❌ *Rencana Eksekusi Dibatalkan.*\nJob ID: \`${pendingJob.id}\``);
+        return;
+      }
+      if (isApprovalIntent) {
+        if (!isExecutionEnabled()) {
+          await sendTelegramMessage(token, chatId, '🛡️ *Mode Eksekusi Nonaktif*\nEksekusi saat ini dinonaktifkan di menu Pengaturan Web App.');
+          return;
+        }
+        await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
+        await sendTelegramMessage(token, chatId, `⏳ *Sedang Mengeksekusi Konfigurasi ke ${router.name}...*\nJob ID: \`${pendingJob.id}\`\nMohon tunggu.`);
+        const result = await approveAndExecuteJob(pendingJob.id, { approvedBy: `Telegram:${userLabel}` });
+        if (result.ok) {
+          await sendTelegramMessage(
+            token,
+            chatId,
+            `✅ *Eksekusi Berhasil Diterapkan!*\nRouter: *${router.name}*\nSeluruh baris perintah telah aktif di router. Data telemetri otomatis disinkronisasi.`
+          );
+        } else {
+          await sendTelegramMessage(
+            token,
+            chatId,
+            `❌ *Eksekusi Gagal!*\nRouter: *${router.name}*\nError: ${result.error || 'Terjadi kesalahan eksekusi'}`
+          );
+        }
+        return;
+      }
+    }
   }
 
   // Command: /exec <commands...>
@@ -518,6 +594,24 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
   }
   const apiKey = provRow.api_key_enc ? decryptSecret(provRow.api_key_enc, provRow.api_key_iv) : '';
 
+  const sessionId = `tg_${chatId}_${router.id}`;
+  let chatRow = db.prepare('SELECT id FROM chats WHERE id = ?').get(sessionId);
+  if (!chatRow) {
+    db.prepare('INSERT INTO chats (id, router_id, title, created_at) VALUES (?, ?, ?, ?)').run(
+      sessionId,
+      router.id,
+      `Telegram: ${chatId}`,
+      now()
+    );
+  }
+
+  // Load last 10 messages for conversational memory (tanya jawab)
+  const history = db
+    .prepare('SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 10')
+    .all(sessionId)
+    .reverse()
+    .map((h) => (h.role === 'assistant' ? { ...h, content: stripAdvisoryFooter(h.content) } : h));
+
   try {
     const digest = buildDigest(JSON.parse(ctx.snapshot), JSON.parse(ctx.summary), ctx.synced_at, {
       routerName: router.name,
@@ -525,7 +619,16 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
       host: router.host,
       apiPort: router.api_port,
     });
-    const messages = buildMessages('chat', digest, [], text);
+    const messages = buildMessages('chat', digest, history, text);
+
+    // Save user message to DB
+    db.prepare('INSERT INTO messages (id, chat_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      randomUUID(),
+      sessionId,
+      'user',
+      text,
+      now()
+    );
 
     const aiRes = await chatCompletion({
       baseUrl: provRow.base_url,
@@ -536,6 +639,17 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
     });
 
     const guarded = guardOutput(aiRes);
+
+    // Save assistant response to DB
+    db.prepare('INSERT INTO messages (id, chat_id, role, content, flags, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      randomUUID(),
+      sessionId,
+      'assistant',
+      guarded.content,
+      guarded.flags,
+      now()
+    );
+
     await sendTelegramMessage(token, chatId, guarded.content);
 
     // If AI proposed configuration script, offer approval button
@@ -550,13 +664,14 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
         });
 
         const approvalPrompt = `⚡ *Konfirmasi Eksekusi Skrip*
-AI mengusulkan *${scriptLines.length} baris perintah* untuk router *${router.name}*:
+AI menerjemahkan permintaan Anda menjadi *${scriptLines.length} baris perintah* untuk router *${router.name}*:
 
 \`\`\`routeros
 ${scriptLines.slice(0, 5).join('\n')}${scriptLines.length > 5 ? `\n...dan ${scriptLines.length - 5} baris lainnya` : ''}
 \`\`\`
 
-Apakah Anda menyetujui perintah ini dieksekusi di router?`;
+Apakah Anda menyetujui perintah ini dieksekusi di router?
+_(Klik tombol di bawah atau balas chat dengan "eksekusi" / "setuju")_`;
 
         const replyMarkup = {
           inline_keyboard: [
