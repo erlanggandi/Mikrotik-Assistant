@@ -527,6 +527,11 @@ Apakah Anda menyetujui perintah ini dieksekusi di router?`;
     const ifaces = snap.interfaces || [];
     const upIfaces = ifaces.filter((i) => i.running === 'true').length;
 
+    const snapKeys = Object.keys(snap).filter((k) => Array.isArray(snap[k]) && snap[k].length > 0);
+    const services = snap['ip/services'] || [];
+    const actServices = services.filter((s) => s.disabled !== 'true').map((s) => s.name);
+    const backupFiles = (snap.files || []).filter((f) => String(f.name || '').endsWith('.backup'));
+
     const statusMsg = `📊 *Status Router: ${router.name}*
 Host: \`${router.host}:${router.api_port}\`
 Status Koneksi: ${router.connection_status === 'ok' ? '🟢 Terhubung' : '🔴 Terputus'}
@@ -538,7 +543,9 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
 • *CPU Load:* ${res1['cpu-load'] != null ? res1['cpu-load'] + '%' : '—'}
 • *RAM:* ${res1['free-memory'] ? Math.round(Number(res1['free-memory']) / 1048576) + ' MB free' : '—'} / ${res1['total-memory'] ? Math.round(Number(res1['total-memory']) / 1048576) + ' MB' : '—'}
 • *Suhu:* ${h.temperature != null ? h.temperature + ' °C' : '—'}
-• *Interface Up:* ${upIfaces} / ${ifaces.length} port aktif`;
+• *Interface Up:* ${upIfaces} / ${ifaces.length} port aktif
+• *Snapshot Telemetri:* ${snapKeys.length} kategori resource tersimpan
+${actServices.length ? `• *Service Aktif:* ${actServices.join(', ')}\n` : ''}${backupFiles.length ? `• *Backup Router:* ${backupFiles.length} file tersedia\n` : ''}`;
 
     await sendTelegramMessage(token, chatId, statusMsg);
     return;
@@ -595,12 +602,18 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
     await sendTelegramMessage(token, chatId, `🔍 *Menjalankan Audit Keamanan Konfigurasi* pada *${router.name}*...\nHarap tunggu sebentar.`);
 
     try {
-      const digest = buildDigest(JSON.parse(ctx.snapshot), JSON.parse(ctx.summary), ctx.synced_at, {
-        routerName: router.name,
-        company: router.company,
-        host: router.host,
-        apiPort: router.api_port,
-      });
+      const digest = buildDigest(
+        JSON.parse(ctx.snapshot),
+        JSON.parse(ctx.summary),
+        ctx.synced_at,
+        {
+          routerName: router.name,
+          company: router.company,
+          host: router.host,
+          apiPort: router.api_port,
+        },
+        1000000
+      );
       const sysPrompt = securityAuditPrompt();
       const messages = [
         { role: 'system', content: `${sysPrompt}\n\n---RICH CONTENT---\n${digest}` },
@@ -626,9 +639,10 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
   // Free-form Natural Language Chat
   await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
 
-  // Auto-sync if router doesn't have context yet
+  // Auto-sync if router doesn't have context yet or context is empty
   let ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
-  if (!ctx) {
+  const isCtxEmpty = !ctx || !ctx.snapshot || ctx.snapshot === '{}' || ctx.snapshot === 'null';
+  if (isCtxEmpty) {
     try {
       const out = await collectRouter(router);
       db.prepare(
@@ -677,12 +691,18 @@ Terakhir Sync: ${ctx.synced_at ? ctx.synced_at.slice(0, 19).replace('T', ' ') : 
   }
 
   try {
-    const digest = buildDigest(snapshot, summary, syncedAt, {
-      routerName: router.name,
-      company: router.company,
-      host: router.host,
-      apiPort: router.api_port,
-    });
+    const digest = buildDigest(
+      snapshot,
+      summary,
+      syncedAt,
+      {
+        routerName: router.name,
+        company: router.company,
+        host: router.host,
+        apiPort: router.api_port,
+      },
+      1000000
+    );
     const messages = buildMessages('chat', digest, history, text);
 
     // Save user message to DB

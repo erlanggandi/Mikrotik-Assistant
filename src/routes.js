@@ -375,6 +375,27 @@ app.get('/api/routers/:id/overview', auth, async (req, res) => {
   });
 });
 
+app.get('/api/routers/:id/context', auth, (req, res) => {
+  const router = getRouter(req.params.id);
+  if (!router) return res.status(404).json({ error: 'router not found' });
+  const ctx = db.prepare('SELECT * FROM contexts WHERE router_id=?').get(router.id);
+  if (!ctx) return res.status(404).json({ error: 'Belum ada snapshot context untuk router ini' });
+  let snapshot = {};
+  let summary = [];
+  try {
+    snapshot = JSON.parse(ctx.snapshot);
+    summary = JSON.parse(ctx.summary);
+  } catch {}
+  res.json({
+    ok: true,
+    routerId: router.id,
+    syncedAt: ctx.synced_at,
+    stale: isStale(ctx.synced_at),
+    summary,
+    snapshot,
+  });
+});
+
 app.get('/api/dashboard', auth, (req, res) => {
   const routers = db.prepare('SELECT id, name, company, host, api_port, secure, connection_status FROM routers ORDER BY name').all();
   const cards = routers.map((r) => {

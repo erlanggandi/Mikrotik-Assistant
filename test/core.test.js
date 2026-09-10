@@ -138,6 +138,19 @@ test('orchestrator digest lists all resources and gaps', () => {
   assert.equal(isStale(new Date().toISOString()), false);
 });
 
+test('buildDigest reads all snapshot resources even if summary is empty or partial', () => {
+  const snapshot = {
+    'system/identity': [{ name: 'Core-Router' }],
+    'ip/services': [{ name: 'telnet', disabled: 'true' }, { name: 'ssh', port: '22' }],
+    'files': [{ name: 'backup-2026.backup' }, { name: 'config.rsc' }],
+  };
+  const digest = buildDigest(snapshot, [], '2026-01-01T00:00:00Z');
+  assert.ok(digest.includes('system/identity'));
+  assert.ok(digest.includes('ip/services'));
+  assert.ok(digest.includes('files'));
+  assert.ok(digest.includes('backup-2026.backup'));
+});
+
 test('digest includes router identity (company/router/host)', () => {
   const digest = buildDigest({}, [], '2026-01-01T00:00:00Z', {
     routerName: 'Lab-MT',

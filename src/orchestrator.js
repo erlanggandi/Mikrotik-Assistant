@@ -175,6 +175,25 @@ function buildFacts(snap) {
     add(`System users: ${users.length} (group: ${groups.join(', ')})`);
   }
 
+  const srv = S['ip/services'] || [];
+  if (srv.length) {
+    const act = srv.filter((s) => s.disabled !== 'true').map((s) => `${s.name}${s.port ? `:${s.port}` : ''}`);
+    const dis = srv.filter((s) => s.disabled === 'true').map((s) => s.name);
+    add(`IP Services: ${act.length} aktif (${act.join(', ')})${dis.length ? `; ${dis.length} nonaktif (${dis.join(', ')})` : ''}`);
+  }
+
+  const rb = S['system/routerboard']?.[0];
+  if (rb && (rb.model || rb['current-firmware'] || rb['serial-number'])) {
+    add(`Routerboard: model ${rb.model || '?'}, firmware ${rb['current-firmware'] || '?'}${rb['upgrade-firmware'] ? ` (upgrade: ${rb['upgrade-firmware']})` : ''}, SN ${rb['serial-number'] || '?'}`);
+  }
+
+  const fls = S.files || [];
+  if (fls.length) {
+    const backups = fls.filter((f) => String(f.name || '').endsWith('.backup'));
+    const rscs = fls.filter((f) => String(f.name || '').endsWith('.rsc'));
+    add(`File router: total ${fls.length}${backups.length ? ` (${backups.length} file .backup: ${backups.map((b) => b.name).join(', ')})` : ''}${rscs.length ? ` (${rscs.length} file .rsc)` : ''}`);
+  }
+
   const upd = S['system/update']?.[0];
   if (upd && upd['new-version']) add(`Update RouterOS tersedia: ${upd['new-version']}`);
   else if (upd && upd.status) add(`Status update: ${upd.status}`);
@@ -184,14 +203,17 @@ function buildFacts(snap) {
 
 const MAX_ROWS = {
   'interfaces': 1000,
+  'interfaces/ethernet': 500,
   'ip/addresses': 1000,
   'ip/routes': 500,
+  'ip/services': 200,
   'ip/firewall/filter': 500,
   'ip/firewall/nat': 500,
   'ip/firewall/mangle': 300,
   'ip/firewall/raw': 300,
   'ip/firewall/address-lists': 500,
   'ip/dhcp-leases': 500,
+  'ip/dhcp-networks': 200,
   'ip/arp': 1000,
   'ip/neighbors': 500,
   'queues/simple': 1000,
@@ -201,9 +223,13 @@ const MAX_ROWS = {
   'ip/dhcp-server': 500,
   'ip/dhcp-client': 500,
   'system/users': 500,
+  'system/scripts': 300,
+  'system/scheduler': 300,
+  'system/logging': 300,
+  'files': 500,
 };
 
-export function buildDigest(snapshot, summary, syncedAt, meta = {}, maxChars = 80000) {
+export function buildDigest(snapshot, summary, syncedAt, meta = {}, maxChars = 500000) {
   const lines = [`CATATAN SYNC: ${syncedAt}`];
   if (meta.routerName || meta.company || meta.host) {
     lines.push('=== IDENTITAS ROUTER ===');
@@ -224,7 +250,7 @@ export function buildDigest(snapshot, summary, syncedAt, meta = {}, maxChars = 8
   outer: for (const name of Object.keys(snapshot || {})) {
     const rows = snapshot[name];
     if (!Array.isArray(rows) || rows.length === 0) continue;
-    if (statusByName[name]?.status !== 'success') continue;
+    if (statusByName[name] && statusByName[name].status === 'failed') continue;
     const max = MAX_ROWS[name] ?? 400;
     let section = `## ${name} ${rows.length > 1 ? `— ${rows.length} record` : ''}`;
     const entries = [];
