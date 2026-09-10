@@ -216,8 +216,15 @@ export function extractScriptFromText(text) {
     const lines = match[1].split('\n');
     for (let l of lines) {
       l = l.trim();
-      if (l && !l.startsWith('#') && (l.startsWith('/') || /^(add|set|remove|enable|disable|reset|print)\b/i.test(l))) {
+      if (!l || l.startsWith('#')) continue;
+      if (l.startsWith('/') || l.startsWith(':')) {
         cmds.push(l);
+      } else if (
+        /^(add|set|remove|enable|disable|reset|print|ip|interface|queue|system|routing|tool|user|radius|bridge|ppp|certificate|snmp)\b/i.test(
+          l
+        )
+      ) {
+        cmds.push(l.startsWith('/') ? l : `/${l}`);
       }
     }
   }
@@ -438,16 +445,20 @@ ${isExecutionEnabled() ? '⚡ *Mode Eksekusi:* AKTIF (Setiap perubahan konfigura
         await sendTelegramMessage(token, chatId, `⏳ *Sedang Mengeksekusi Konfigurasi ke ${router.name}...*\nJob ID: \`${pendingJob.id}\`\nMohon tunggu.`);
         const result = await approveAndExecuteJob(pendingJob.id, { approvedBy: `Telegram:${userLabel}` });
         if (result.ok) {
+          const summary = (result.output || []).map((o) => `• \`${o.line}\`: OK`).join('\n');
           await sendTelegramMessage(
             token,
             chatId,
-            `✅ *Eksekusi Berhasil Diterapkan!*\nRouter: *${router.name}*\nSeluruh baris perintah telah aktif di router. Data telemetri otomatis disinkronisasi.`
+            `✅ *Eksekusi Berhasil Diterapkan!*\nRouter: *${router.name}*\nSeluruh ${result.output?.length || ''} baris perintah telah aktif di router.\n\n\`\`\`\n${summary}\n\`\`\``
           );
         } else {
+          const summary = (result.output || [])
+            .map((o) => `${o.ok ? '✅' : '❌'} \`${o.line}\`${o.error ? ` (${o.error})` : ''}`)
+            .join('\n');
           await sendTelegramMessage(
             token,
             chatId,
-            `❌ *Eksekusi Gagal!*\nRouter: *${router.name}*\nError: ${result.error || 'Terjadi kesalahan eksekusi'}`
+            `⚠️ *Hasil Eksekusi Sebagian / Gagal*\nRouter: *${router.name}*\n${result.error || ''}\n\n*Rincian Perintah:*\n${summary || 'Tidak ada detail output.'}`
           );
         }
         return;
@@ -805,11 +816,14 @@ export async function handleIncomingCallbackQuery(token, cbQuery, allowedChats) 
         `✅ *Perubahan Berhasil Dieksekusi!*\nJob ID: \`${jobId}\`\nDisetujui oleh: ${userLabel}\n\n*Hasil RouterOS:*\n\`\`\`\n${summaryLines || 'Selesai tanpa error.'}\n\`\`\``
       );
     } else {
+      const summaryLines = (result.output || [])
+        .map((o) => `${o.ok ? '✅' : '❌'} \`${o.line}\`${o.error ? ` (${o.error})` : ''}`)
+        .join('\n');
       await editMessageText(
         token,
         chatId,
         messageId,
-        `❌ *Eksekusi Gagal!*\nJob ID: \`${jobId}\`\nError: ${result.error}\n\nPeriksa kembali konfigurasi dan permission akun router.`
+        `⚠️ *Hasil Eksekusi Sebagian / Gagal*\nJob ID: \`${jobId}\`\n${result.error || ''}\n\n*Rincian Perintah:*\n${summaryLines || 'Tidak ada detail output.'}`
       );
     }
     return;

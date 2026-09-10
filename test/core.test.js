@@ -11,6 +11,9 @@ import {
   wordsToAttrs,
   cliToApiSentence,
   isDestructiveCommand,
+  normalizeCliCommand,
+  hasCliSyntax,
+  containsDestructiveCommand,
 } from '../src/routeros.js';
 import { createHash } from 'node:crypto';
 import { containsWriteCommands, guardOutput } from '../src/guard.js';
@@ -239,4 +242,97 @@ test('extractScriptFromText extracts RouterOS commands from various markdown blo
 
   const text4 = 'Teks biasa tanpa blok kode:\n/ip dns set allow-remote-requests=no\nBisa dijalankan.';
   assert.deepEqual(extractScriptFromText(text4), ['/ip dns set allow-remote-requests=no']);
+
+  // Unslashed commands in code blocks
+  const textUnslashed = '```routeros\ninterface ethernet set ether1 comment="WAN"\nip service disable telnet\nqueue simple add name=Q1 target=1.1.1.1/32 max-limit=1M/1M\n```';
+  assert.deepEqual(extractScriptFromText(textUnslashed), [
+    '/interface ethernet set ether1 comment="WAN"',
+    '/ip service disable telnet',
+    '/queue simple add name=Q1 target=1.1.1.1/32 max-limit=1M/1M',
+  ]);
+});
+
+test('normalizeCliCommand normalizes [find name=...] and [find default-name=...]', () => {
+  assert.equal(
+    normalizeCliCommand('/ip service set [find name=telnet] disabled=yes'),
+    '/ip service set telnet disabled=yes'
+  );
+  assert.equal(
+    normalizeCliCommand('/ip service disable [find name=telnet]'),
+    '/ip service disable telnet'
+  );
+  assert.equal(
+    normalizeCliCommand('/interface ethernet set [find name="ether1"] comment="WAN"'),
+    '/interface ethernet set ether1 comment="WAN"'
+  );
+  assert.equal(
+    normalizeCliCommand('/interface ethernet disable [find default-name=ether5]'),
+    '/interface ethernet disable ether5'
+  );
+  assert.equal(
+    normalizeCliCommand('/queue simple set [find name="Client-1"] target=20.20.30.251/32'),
+    '/queue simple set Client-1 target=20.20.30.251/32'
+  );
+  assert.equal(
+    normalizeCliCommand('/queue simple set [find where name=Global-Limit] target=20.20.30.0/24'),
+    '/queue simple set Global-Limit target=20.20.30.0/24'
+  );
+  // Preserves commands without [find name=...]
+  assert.equal(
+    normalizeCliCommand('/ip firewall filter enable [find comment="Drop input"]'),
+    '/ip firewall filter enable [find comment="Drop input"]'
+  );
+});
+
+test('hasCliSyntax detects RouterOS CLI constructs', () => {
+  assert.equal(hasCliSyntax('/ip service set telnet disabled=yes'), false);
+  assert.equal(hasCliSyntax('/ip firewall filter add chain=input action=drop'), false);
+  assert.equal(hasCliSyntax('/ip firewall filter enable [find comment="Drop input"]'), true);
+  assert.equal(hasCliSyntax(':foreach i in=[/interface find] do={ :put $i }'), true);
+  assert.equal(hasCliSyntax('/system script run s1; /system script run s2'), true);
+});
+
+test('containsDestructiveCommand detects dangerous operations in strings and words', () => {
+  assert.equal(containsDestructiveCommand('/system reboot'), true);
+  assert.equal(containsDestructiveCommand('/system reset-configuration'), true);
+  assert.equal(containsDestructiveCommand('/disk format drive1'), true);
+  assert.equal(containsDestructiveCommand('/user remove admin'), true);
+  assert.equal(containsDestructiveCommand('/ip service disable telnet'), false);
+  assert.equal(containsDestructiveCommand('/ip address add address=1.1.1.1/24 interface=ether1'), false);
+});
+
+test('executeScript executes commands via hybrid direct API and native script runner', async () => {
+  const c = new RouterOSConnection({ host: 'x', username: 'admin', password: 'pw' });
+  c.socket = { destroyed: false, write: () => {} };
+  c.authenticated = true;
+
+  const sentCommands = [];
+  c.command = async (words) => {
+    sentCommands.push(words);
+    const cmd = words[0];
+    if (cmd === '/system/script/add') {
+      return [{ words: ['!done', '=ret=*99'] }];
+    }
+    return [{ words: ['!done'] }];
+  };
+
+  const script = [
+    '/system identity set name=Core-HQ',
+    '/queue simple set [find name="Client-1"] target=10.0.0.1/32',
+    '/ip firewall filter enable [find comment="Drop input"]',
+  ];
+
+  const res = await c.executeScript(script);
+  assert.equal(res.ok, true);
+  assert.equal(res.results.length, 3);
+  assert.equal(res.results.every((r) => r.ok), true);
+
+  // First command was direct API
+  assert.deepEqual(sentCommands[0], ['/system/identity/set', '=name=Core-HQ']);
+  // Second command was normalized to direct API
+  assert.deepEqual(sentCommands[1], ['/queue/simple/set', '=numbers=Client-1', '=target=10.0.0.1/32']);
+  // Third command had [find comment=...] so it ran via native /system/script runner
+  assert.equal(sentCommands[2][0], '/system/script/add');
+  assert.equal(sentCommands[3][0], '/system/script/run');
+  assert.equal(sentCommands[4][0], '/system/script/remove');
 });

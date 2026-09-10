@@ -104,9 +104,43 @@ export const BLOCKED_DESTRUCTIVE = [
   /^\/user\/(remove|set)$/i,
 ];
 
+export function containsDestructiveCommand(text) {
+  const str = String(text || '');
+  return (
+    BLOCKED_DESTRUCTIVE.some((re) => re.test(str)) ||
+    /\b(?:system\s+(?:reset-configuration|reboot|shutdown))\b/i.test(str) ||
+    /\/system\/(?:reset-configuration|reboot|shutdown)\b/i.test(str) ||
+    /\/disk\/(?:format|eject)\b/i.test(str) ||
+    /\b(?:disk\s+(?:format|eject))\b/i.test(str) ||
+    /\/user\/(?:remove|set)\b/i.test(str) ||
+    /\b(?:user\s+(?:remove|set))\b/i.test(str)
+  );
+}
+
 export function isDestructiveCommand(words) {
   const cmd = words[0] || '';
-  return BLOCKED_DESTRUCTIVE.some((re) => re.test(cmd));
+  return BLOCKED_DESTRUCTIVE.some((re) => re.test(cmd)) || containsDestructiveCommand(words.join(' '));
+}
+
+export function normalizeCliCommand(line) {
+  let s = String(line || '').trim();
+  if (!s || s.startsWith('#')) return s;
+
+  // Replace [find (?:where\s+)?(?:name|default-name)=["']?([^"'\]]+)["']?\] with "$1"
+  s = s.replace(/\[\s*find\s+(?:where\s+)?(?:name|default-name)=["']?([^"'\]]+)["']?\s*\]/gi, (match, val) => {
+    return /\s/.test(val) ? `"${val}"` : val;
+  });
+
+  return s;
+}
+
+export function hasCliSyntax(line) {
+  const trimmed = String(line || '').trim();
+  return (
+    /\[\s*find\b/i.test(trimmed) ||
+    /^\s*:(if|for|foreach|while|global|local|put|execute|do|log|resolve|to)\b/i.test(trimmed) ||
+    /[;$]/.test(trimmed)
+  );
 }
 
 const ACTION_VERBS = new Set(['add', 'set', 'remove', 'enable', 'disable', 'reset', 'print', 'get', 'export', 'move', 'comment', 'reboot']);
@@ -331,29 +365,129 @@ export class RouterOSConnection {
     }
   }
 
-  async executeScript(scriptOrLines, { onProgress } = {}) {
+  async executeNativeCliCommand(cliLine) {
+    if (containsDestructiveCommand(cliLine)) {
+      throw new Error(`Perintah berbahaya diblokir secara permanen: ${cliLine}`);
+    }
+    const scriptName = `__ma_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    // 1. Add temporary script
+    const addRes = await this.command(
+      ['/system/script/add', `=name=${scriptName}`, `=source=${cliLine}`, '=dont-require-permissions=yes'],
+      { allowWrite: true }
+    );
+    const addTrap = addRes.find((r) => r.words && r.words[0] === '!trap');
+    if (addTrap) {
+      throw new Error(trapMessage(addTrap) || 'Gagal menambahkan script temporer di RouterOS');
+    }
+    const retWord = addRes[0]?.words.find((w) => w.startsWith('=ret='));
+    let scriptId = retWord ? retWord.slice(5) : null;
+
+    if (!scriptId) {
+      try {
+        const lookup = await this.command(['/system/script/print', `?name=${scriptName}`], { allowWrite: false });
+        const row = lookup.find((r) => r.words && r.words[0] === '!re');
+        const idWord = row?.words.find((w) => w.startsWith('=.id='));
+        if (idWord) scriptId = idWord.slice(5);
+      } catch {
+        /* ignore lookup error */
+      }
+    }
+
+    try {
+      // 2. Run the script using persistent .id or name
+      const runArg = scriptId ? `numbers=${scriptId}` : `numbers=${scriptName}`;
+      let runRes = await this.command(['/system/script/run', `=${runArg}`], { allowWrite: true });
+      let runTrap = runRes.find((r) => r.words && r.words[0] === '!trap');
+      if (runTrap && scriptId) {
+        runRes = await this.command(['/system/script/run', `=number=${scriptId}`], { allowWrite: true });
+        runTrap = runRes.find((r) => r.words && r.words[0] === '!trap');
+      }
+      if (runTrap) {
+        throw new Error(trapMessage(runTrap) || 'Gagal mengeksekusi script di RouterOS');
+      }
+      return { ok: true, output: 'OK' };
+    } finally {
+      // 3. Always clean up the temporary script
+      try {
+        const rmArg = scriptId ? `numbers=${scriptId}` : `numbers=${scriptName}`;
+        await this.command(['/system/script/remove', `=${rmArg}`], { allowWrite: true });
+      } catch {
+        /* failsafe cleanup */
+      }
+    }
+  }
+
+  async executeScript(scriptOrLines, { onProgress, continueOnError = true } = {}) {
     const lines = Array.isArray(scriptOrLines) ? scriptOrLines : String(scriptOrLines).split('\n');
     const results = [];
+    let hasFailure = false;
+
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i].trim();
       if (!raw || raw.startsWith('#')) continue;
-      const words = cliToApiSentence(raw);
-      if (!words) continue;
       if (onProgress) onProgress({ lineIndex: i, total: lines.length, command: raw });
-      try {
-        const res = await this.command(words, { allowWrite: true });
-        const trap = res.find((r) => r.words && r.words[0] === '!trap');
-        if (trap) {
-          const errMsg = trapMessage(trap) || 'RouterOS error (!trap)';
-          results.push({ line: raw, ok: false, error: errMsg });
-          return { ok: false, error: `Gagal pada baris: "${raw}". Error: ${errMsg}`, results };
-        }
-        results.push({ line: raw, ok: true, output: res.map((r) => r.words.join(' ')).join('\n') });
-      } catch (err) {
-        const msg = err.message || String(err);
-        results.push({ line: raw, ok: false, error: msg });
-        return { ok: false, error: `Gagal pada baris: "${raw}". Error: ${msg}`, results };
+
+      if (containsDestructiveCommand(raw)) {
+        results.push({ line: raw, ok: false, error: 'Perintah berbahaya diblokir secara permanen' });
+        hasFailure = true;
+        if (!continueOnError) break;
+        continue;
       }
+
+      const norm = normalizeCliCommand(raw);
+      let executedOk = false;
+      let lastError = '';
+      let outputStr = '';
+
+      // Strategy 1: Direct API (when no complex CLI-only syntax)
+      if (!hasCliSyntax(norm)) {
+        const words = cliToApiSentence(norm);
+        if (words) {
+          try {
+            const res = await this.command(words, { allowWrite: true });
+            const trap = res.find((r) => r.words && r.words[0] === '!trap');
+            if (trap) {
+              lastError = trapMessage(trap) || 'RouterOS error (!trap)';
+            } else {
+              executedOk = true;
+              outputStr = res.map((r) => r.words.join(' ')).join('\n');
+            }
+          } catch (err) {
+            lastError = err.message || String(err);
+          }
+        }
+      }
+
+      // Strategy 2: Fallback to Native RouterOS Script Runner
+      if (!executedOk) {
+        try {
+          const scriptRes = await this.executeNativeCliCommand(raw);
+          executedOk = true;
+          outputStr = scriptRes.output || 'OK';
+          lastError = '';
+        } catch (scriptErr) {
+          lastError = scriptErr.message || lastError || 'Eksekusi gagal';
+        }
+      }
+
+      if (executedOk) {
+        results.push({ line: raw, ok: true, output: outputStr });
+      } else {
+        hasFailure = true;
+        results.push({ line: raw, ok: false, error: lastError });
+        if (!continueOnError) break;
+      }
+    }
+
+    if (hasFailure) {
+      const failed = results.filter((r) => !r.ok);
+      const firstErr = failed[0];
+      return {
+        ok: false,
+        error: `Sebagian perintah gagal (${failed.length} dari ${results.length}): "${firstErr?.line}" -> ${firstErr?.error}`,
+        results,
+      };
     }
     return { ok: true, results };
   }
