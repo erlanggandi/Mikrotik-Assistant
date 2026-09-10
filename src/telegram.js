@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { db, getSetting, now, getTelegramActiveRouter, setTelegramActiveRouter } from './db.js';
 import { decryptSecret } from './security.js';
 import { collectRouter } from './collector.js';
-import { RouterOSConnection } from './routeros.js';
+import { RouterOSConnection, friendlyRouterError } from './routeros.js';
 import { chatCompletion } from './llm.js';
 import { buildDigest, buildMessages, securityAuditPrompt } from './orchestrator.js';
 import { guardOutput, containsWriteCommands, stripAdvisoryFooter } from './guard.js';
@@ -554,22 +554,49 @@ ${actServices.length ? `• *Service Aktif:* ${actServices.join(', ')}\n` : ''}$
   // Command: /sync
   if (text === '/sync') {
     await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
-    await sendTelegramMessage(token, chatId, `⏳ Memulai sinkronisasi data dari *${router.name}*...`);
+    await sendTelegramMessage(token, chatId, `⏳ Memulai sinkronisasi data dari *${router.name}* (${router.host}:${router.api_port || 8728})...`);
     try {
       const out = await collectRouter(router);
+      if (!out || !out.connected) {
+        throw new Error(out?.error || 'Gagal terhubung ke RouterOS API');
+      }
+
       db.prepare(
         'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
       ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
       db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
 
+      if (out.okCount === 0) {
+        const failedItems = (out.summary || []).filter((s) => s.status === 'failed');
+        const sampleErrors = failedItems.slice(0, 3).map((f) => `• \`${f.resource}\`: ${f.error || 'gagal'}`).join('\n');
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `⚠️ *Sinkronisasi Selesai Tanpa Resource (0 Resource)*\n` +
+            `Router: *${router.name}*\n\n` +
+            `Koneksi ke router berhasil, namun *0 resource* berhasil ditarik.\n` +
+            (sampleErrors ? `\n*Kendala pada perintah API:*\n${sampleErrors}\n` : '') +
+            `\n*Penyebab umum:*\n` +
+            `• User *${router.username}* tidak memiliki izin *read* dan *api* di MikroTik (\`/user group\`).\n` +
+            `• Router belum memiliki konfigurasi pada resource tersebut.\n` +
+            `Pastikan user memiliki hak akses yang cukup di menu System -> Users.`
+        );
+      } else {
+        let successMsg = `✅ *Sinkronisasi Sukses!*\nRouter: *${router.name}*\nBerhasil menarik *${out.okCount}* resource RouterOS dalam mode read-only.`;
+        if (out.failedCount > 0) {
+          successMsg += `\n\n_Catatan: ${out.failedCount} resource dilewati/tidak dapat dibaca (izin terbatas atau tidak didukung versi RouterOS)._`;
+        }
+        await sendTelegramMessage(token, chatId, successMsg);
+      }
+    } catch (e) {
+      const errMsg = e.message || String(e);
+      const friendly = friendlyRouterError(errMsg, router.host, router.api_port);
+      db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(friendly, router.id);
       await sendTelegramMessage(
         token,
         chatId,
-        `✅ *Sinkronisasi Sukses!*\nRouter: *${router.name}*\nBerhasil menarik *${out.okCount}* resource RouterOS dalam mode read-only.`
+        `❌ *Sinkronisasi Gagal!*\nRouter: *${router.name}* (\`${router.host}:${router.api_port || 8728}\`)\n\n*Kendala:*\n${friendly}`
       );
-    } catch (e) {
-      db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(e.message || String(e), router.id);
-      await sendTelegramMessage(token, chatId, `❌ *Sinkronisasi Gagal!*\nDetail: ${e.message || String(e)}`);
     }
     return;
   }
@@ -578,17 +605,23 @@ ${actServices.length ? `• *Service Aktif:* ${actServices.join(', ')}\n` : ''}$
   if (text === '/audit') {
     await telegramApi(token, 'sendChatAction', { chat_id: chatId, action: 'typing' });
     let ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
-    if (!ctx) {
+    const isCtxEmpty = !ctx || !ctx.snapshot || ctx.snapshot === '{}' || ctx.snapshot === 'null';
+    if (isCtxEmpty) {
       try {
         await sendTelegramMessage(token, chatId, `⏳ Mengambil data telemetri dari *${router.name}* untuk audit...`);
         const out = await collectRouter(router);
+        if (!out || !out.connected) {
+          throw new Error(out?.error || 'Gagal terhubung ke RouterOS API');
+        }
         db.prepare(
           'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
         ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
         db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
         ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
       } catch (e) {
-        await sendTelegramMessage(token, chatId, `⚠️ Gagal sinkronisasi data router: ${e.message || String(e)}`);
+        const friendly = friendlyRouterError(e.message || String(e), router.host, router.api_port);
+        db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(friendly, router.id);
+        await sendTelegramMessage(token, chatId, `⚠️ Gagal sinkronisasi data router: ${friendly}`);
         return;
       }
     }
@@ -645,11 +678,17 @@ ${actServices.length ? `• *Service Aktif:* ${actServices.join(', ')}\n` : ''}$
   if (isCtxEmpty) {
     try {
       const out = await collectRouter(router);
-      db.prepare(
-        'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
-      ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
-      db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
-      ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+      if (out && out.connected) {
+        db.prepare(
+          'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
+        ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());
+        db.prepare(`UPDATE routers SET connection_status='ok', last_sync=?, last_error=NULL WHERE id=?`).run(now(), router.id);
+        ctx = db.prepare('SELECT * FROM contexts WHERE router_id = ?').get(router.id);
+      } else {
+        const friendly = friendlyRouterError(out?.error || 'Gagal terhubung ke RouterOS API', router.host, router.api_port);
+        db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(friendly, router.id);
+        logger.warn({ event: 'telegram_auto_sync_failed', error: friendly, routerId: router.id });
+      }
     } catch (err) {
       logger.warn({ event: 'telegram_auto_sync_error', error: err.message, routerId: router.id });
     }

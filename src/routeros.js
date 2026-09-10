@@ -534,3 +534,23 @@ export function wordsToAttrs(sentence) {
   }
   return attrs;
 }
+
+export function friendlyRouterError(msg, host, port) {
+  const m = String(msg || '').toLowerCase();
+  if (/invalid user name or password|login failed|authentication failed/i.test(m)) {
+    return 'Username atau password router salah. Periksa akun di menu System -> Users pada MikroTik.';
+  }
+  if (/econnrefused/i.test(m)) {
+    return `Koneksi ke port ${port || 8728} pada ${host} ditolak (ECONNREFUSED). Pastikan API MikroTik aktif (/ip service enable api) dan parameter address di service API tidak membatasi IP server ini.`;
+  }
+  if (/etimedout|connect timeout|timeout/i.test(m)) {
+    return `Koneksi ke ${host}:${port || 8728} time out (15s). Pastikan router dapat dihubungi/ping dan port ${port || 8728} diizinkan di /ip firewall filter chain=input.`;
+  }
+  if (/ehostunreach|enetunreach/i.test(m)) {
+    return `Alamat ${host} tidak dapat dijangkau (Network/Host Unreachable). Periksa routing jaringan atau VPN dari server/Docker ke router.`;
+  }
+  if (/connection closed by router/i.test(m)) {
+    return `Koneksi ditutup langsung oleh router. Coba uncheck API-SSL jika tidak menggunakan sertifikat SSL, atau periksa batasan login di MikroTik.`;
+  }
+  return msg;
+}

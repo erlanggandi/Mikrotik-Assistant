@@ -142,6 +142,10 @@ export async function approveAndExecuteJob(id, { approvedBy = 'admin' } = {}) {
   if (execResult.ok) {
     collectRouter(router)
       .then((out) => {
+        if (!out || !out.connected) {
+          logger.warn({ event: 'post_exec_sync_failed', error: out?.error || 'not connected', routerId: router.id });
+          return;
+        }
         db.prepare(
           'INSERT INTO contexts (router_id, snapshot, summary, synced_at) VALUES (?,?,?,?) ON CONFLICT(router_id) DO UPDATE SET snapshot=excluded.snapshot, summary=excluded.summary, synced_at=excluded.synced_at'
         ).run(router.id, JSON.stringify(out.results), JSON.stringify(out.summary), now());

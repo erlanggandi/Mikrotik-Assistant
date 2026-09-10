@@ -14,6 +14,7 @@ import {
   normalizeCliCommand,
   hasCliSyntax,
   containsDestructiveCommand,
+  friendlyRouterError,
 } from '../src/routeros.js';
 import { createHash } from 'node:crypto';
 import { containsWriteCommands, guardOutput } from '../src/guard.js';
@@ -348,4 +349,28 @@ test('executeScript executes commands via hybrid direct API and native script ru
   assert.equal(sentCommands[2][0], '/system/script/add');
   assert.equal(sentCommands[3][0], '/system/script/run');
   assert.equal(sentCommands[4][0], '/system/script/remove');
+});
+
+test('friendlyRouterError maps technical errors to actionable user messages', () => {
+  const host = '192.168.88.1';
+  const port = 8728;
+
+  const authErr = friendlyRouterError('invalid user name or password', host, port);
+  assert.match(authErr, /Username atau password router salah/);
+
+  const authFailErr = friendlyRouterError('authentication failed: invalid user name', host, port);
+  assert.match(authFailErr, /Username atau password router salah/);
+
+  const refusedErr = friendlyRouterError('connect ECONNREFUSED 192.168.88.1:8728', host, port);
+  assert.match(refusedErr, /ECONNREFUSED/);
+  assert.match(refusedErr, /8728/);
+
+  const timeoutErr = friendlyRouterError('connect timeout', host, port);
+  assert.match(timeoutErr, /time out/);
+
+  const unreachErr = friendlyRouterError('connect EHOSTUNREACH', host, port);
+  assert.match(unreachErr, /Network\/Host Unreachable/);
+
+  const closedErr = friendlyRouterError('connection closed by router', host, port);
+  assert.match(closedErr, /Koneksi ditutup langsung oleh router/);
 });
