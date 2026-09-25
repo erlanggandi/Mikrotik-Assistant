@@ -762,7 +762,7 @@ app.post('/api/providers', auth, (req, res) => {
   const mdl = String(model ?? preset?.model ?? '').trim();
   const lbl = String(label ?? preset?.label ?? (url || 'Kustom')).trim();
   if (!url || !mdl) return res.status(400).json({ error: 'Base URL dan Model wajib diisi.' });
-  const id = preset ? preset.key : 'custom-' + randomToken(4);
+  const id = preset && preset.key !== 'custom' ? preset.key : 'custom-' + randomToken(4);
   const existing = getProviderRow(id);
   const ts = now();
   if (existing) {
@@ -793,7 +793,7 @@ app.put('/api/providers/settings', auth, (req, res) => {
 app.put('/api/providers/:id', auth, (req, res) => {
   const row = getProviderRow(req.params.id);
   if (!row) return res.status(404).json({ error: 'provider tidak ditemukan' });
-  const { baseUrl, model, apiKey, clearKey } = req.body || {};
+  const { label, baseUrl, model, apiKey, clearKey } = req.body || {};
   const ts = now();
   let enc = row.api_key_enc;
   let iv = row.api_key_iv;
@@ -802,8 +802,12 @@ app.put('/api/providers/:id', auth, (req, res) => {
     const e = encryptSecret(String(apiKey).trim());
     enc = e.enc; iv = e.iv;
   }
-  db.prepare('UPDATE ai_providers SET base_url=?, model=?, api_key_enc=?, api_key_iv=?, updated_at=? WHERE id=?')
-    .run((baseUrl ?? row.base_url).trim(), (model ?? row.model).trim(), enc, iv, ts, row.id);
+  const nextLabel = String(label ?? row.label).trim() || row.label;
+  const nextUrl = String(baseUrl ?? row.base_url).trim();
+  const nextModel = String(model ?? row.model).trim();
+  if (!nextUrl || !nextModel) return res.status(400).json({ error: 'Base URL dan Model wajib diisi.' });
+  db.prepare('UPDATE ai_providers SET label=?, base_url=?, model=?, api_key_enc=?, api_key_iv=?, updated_at=? WHERE id=?')
+    .run(nextLabel, nextUrl, nextModel, enc, iv, ts, row.id);
   logger.info({ event: 'provider_update', operation: 'provider', result: 'success', id: row.id });
   res.json({ ok: true, provider: providerView(getProviderRow(row.id)) });
 });

@@ -2489,8 +2489,19 @@ async function renderProvider() {
   const provs = data.providers || [];
   const presets = data.presets || [];
   const editing = state.provEditId ? provs.find((p) => p.id === state.provEditId) : null;
+  if (state.provEditId && !editing) state.provEditId = null;
+  const presetSel = editing
+    ? (presets.find((pr) => pr.key !== 'custom' && pr.url && String(editing.baseUrl || '').startsWith(pr.url))?.key || 'custom')
+    : 'custom';
 
   content.innerHTML = `
+  <div class="page-head">
+    <div>
+      <div class="page-eyebrow">// ai engine</div>
+      <h2 class="page-title">${icon('zap', '', 18)} AI Provider</h2>
+      <p class="page-desc">Kelola engine AI untuk Chat Copilot dan Audit Keamanan. Satu provider aktif dalam satu waktu.</p>
+    </div>
+  </div>
   <div class="pv-cols">
     <div class="pv-col">
       <div class="card">
@@ -2498,18 +2509,18 @@ async function renderProvider() {
           <h4>Daftar AI Provider</h4>
           <span class="badge neutral">${provs.length} Provider</span>
         </div>
-        <p class="card-sub">Pilih salah satu provider sebagai engine AI aktif untuk fitur Chat Copilot dan Audit Keamanan.</p>
+        <p class="card-sub">Uji koneksi untuk melihat model tersedia, lalu terapkan model langsung dari daftar.</p>
         <div id="pv-msg"></div>
 
         <div class="pv-list">
-          ${provs.map((p) => `
+          ${provs.length === 0 ? '<div class="empty">Belum ada provider. Tambahkan lewat formulir di samping.</div>' : provs.map((p) => `
             <div class="pv-row ${p.active ? 'pv-active' : ''}">
               <div class="pv-head">
                 ${p.active ? '<span class="badge ok">AKTIF</span>' : ''}
                 <b>${esc(p.label)}</b>
               </div>
-              <div class="mono cell-muted pv-meta">${esc(p.baseUrl)} · model: <b>${esc(p.model)}</b></div>
-              <small class="cell-muted">${p.hasKey ? '✓ API key tersimpan (' + esc(p.keyPreview) + ')' : '✕ API key belum diisi'}</small>
+              <div class="mono cell-muted pv-meta">${esc(p.baseUrl)} · <b>${esc(p.model)}</b></div>
+              <div class="pv-keyline">${p.hasKey ? `<span class="badge ok">key tersimpan ${esc(p.keyPreview)}</span>` : '<span class="badge neutral">tanpa key</span>'}</div>
 
               <div class="pv-actions">
                 ${p.active ? '' : `<button class="primary btn-sm" data-act="activate" data-id="${esc(p.id)}">Aktifkan</button>`}
@@ -2520,11 +2531,14 @@ async function renderProvider() {
 
               ${state.provTest && state.provTest.id === p.id && state.provTest.models.length ? `
                 <div class="pv-models">
-                  <select id="pv-modelsel-${esc(p.id)}">
-                    <option value="">— Pilih Model Tersedia —</option>
-                    ${state.provTest.models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('')}
-                  </select>
-                  <button class="primary btn-sm" data-act="use-model" data-id="${esc(p.id)}">Terapkan Model</button>
+                  <label>Model tersedia — pilih lalu terapkan</label>
+                  <div class="pv-models-row">
+                    <select id="pv-modelsel-${esc(p.id)}">
+                      <option value="">— Pilih Model —</option>
+                      ${state.provTest.models.map((m) => `<option value="${esc(m)}" ${m === p.model ? 'selected' : ''}>${esc(m)}${m === p.model ? ' (saat ini)' : ''}</option>`).join('')}
+                    </select>
+                    <button class="primary btn-sm" data-act="use-model" data-id="${esc(p.id)}">Terapkan</button>
+                  </div>
                 </div>
               ` : ''}
             </div>
@@ -2534,24 +2548,33 @@ async function renderProvider() {
     </div>
 
     <div class="pv-col">
-      <div class="card">
-        <h4>${editing ? 'Edit AI Provider' : 'Tambah AI Provider Baru'}</h4>
-        <label>Preset Provider Populer</label>
+      <div class="card" id="pv-form-card">
+        <div class="card-title">
+          <h4>${editing ? 'Edit AI Provider' : 'Tambah AI Provider Baru'}</h4>
+          ${editing ? '<span class="badge lvl-info">Mode Edit</span>' : ''}
+        </div>
+        ${editing ? `
+          <div class="pv-edit-banner">
+            ${icon('edit', '', 13)}
+            <span>Mengedit <b>${esc(editing.label)}</b>. Kosongkan API key untuk mempertahankan key lama.</span>
+            <button class="btn-sm ghost" id="cf-cancel-top">Batal</button>
+          </div>` : ''}
+        <label for="cf-preset">Preset Provider Populer</label>
         <select id="cf-preset">
-          ${presets.map((pr) => `<option value="${esc(pr.key)}">${esc(pr.label)}</option>`).join('')}
+          ${presets.map((pr) => `<option value="${esc(pr.key)}" ${pr.key === presetSel ? 'selected' : ''}>${esc(pr.label)}</option>`).join('')}
         </select>
 
-        <label>Nama Label</label>
+        <label for="cf-label">Nama Label</label>
         <input id="cf-label" value="${editing ? esc(editing.label) : ''}" placeholder="misal: OpenAI GPT-4o" />
 
-        <label>Base URL Endpoint</label>
-        <input id="cf-url" value="${editing ? esc(editing.baseUrl) : ''}" placeholder="https://api.openai.com/v1" />
+        <label for="cf-url">Base URL Endpoint</label>
+        <input id="cf-url" class="mono" value="${editing ? esc(editing.baseUrl) : ''}" placeholder="https://api.openai.com/v1" />
 
-        <label>Nama Model</label>
-        <input id="cf-model" value="${editing ? esc(editing.model) : ''}" placeholder="gpt-4o-mini" />
+        <label for="cf-model">Nama Model</label>
+        <input id="cf-model" class="mono" value="${editing ? esc(editing.model) : ''}" placeholder="gpt-4o-mini" />
 
-        <label>API Key</label>
-        <input id="cf-key" type="password" placeholder="${editing && editing.hasKey ? '•••• (biarkan kosong untuk mempertahankan)' : 'sk-...'}" />
+        <label for="cf-key">API Key ${editing && editing.hasKey ? `<small class="cell-muted">tersimpan ${esc(editing.keyPreview)}</small>` : ''}</label>
+        <input id="cf-key" type="password" placeholder="${editing && editing.hasKey ? 'Kosongkan untuk mempertahankan' : 'sk-...'}" />
 
         <div id="cf-msg"></div>
 
@@ -2577,41 +2600,54 @@ async function renderProvider() {
     </div>
   </div>`;
 
-  // Bind Actions
-  content.querySelectorAll('#pv-cols button, .pv-actions button').forEach((b) => {
+  // Bind Actions (list + inline model picker)
+  content.querySelectorAll('.pv-actions button, .pv-models button').forEach((b) => {
     b.onclick = async () => {
       const id = b.dataset.id;
       const act = b.dataset.act;
-      if (act === 'activate') {
-        await api('/api/providers/' + id + '/activate', { method: 'POST' });
-        showToast('Provider diaktifkan', 'ok');
-        renderProvider();
-      } else if (act === 'test') {
-        b.disabled = true;
-        b.innerHTML = `${icon('refresh-cw', '', 12)} Menguji...`;
-        try {
-          const r = await api('/api/providers/' + id + '/test', { method: 'POST' });
-          state.provTest = { id, models: r.models || [] };
-          showToast(`Terhubung! ${r.models?.length || 0} model tersedia`, 'ok');
-        } catch (e) {
-          showToast('Tes gagal: ' + e.message, 'err');
+      const restore = () => renderProvider();
+      try {
+        if (act === 'activate') {
+          await api('/api/providers/' + id + '/activate', { method: 'POST' });
+          showToast('Provider diaktifkan', 'ok');
+          renderProvider();
+        } else if (act === 'test') {
+          b.disabled = true;
+          b.innerHTML = `${icon('refresh-cw', '', 12)} Menguji...`;
+          try {
+            const r = await api('/api/providers/' + id + '/test', { method: 'POST' });
+            state.provTest = { id, models: r.models || [] };
+            showToast(`Terhubung! ${r.models?.length || 0} model tersedia`, 'ok');
+          } catch (e) {
+            state.provTest = { id: null, models: [] };
+            showToast('Tes gagal: ' + (e.message || e), 'err');
+          }
+          await renderProvider();
+          document.getElementById('pv-modelsel-' + id)?.closest('.pv-models')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else if (act === 'use-model') {
+          const sel = document.getElementById('pv-modelsel-' + id);
+          if (!sel?.value) { showToast('Pilih model dari daftar dahulu', 'warn'); return; }
+          b.disabled = true;
+          b.innerHTML = `${icon('refresh-cw', '', 12)} Menerapkan...`;
+          await api('/api/providers/' + id, { method: 'PUT', body: { model: sel.value } });
+          showToast('Model diterapkan: ' + sel.value, 'ok');
+          state.provTest = { id: null, models: [] };
+          renderProvider();
+        } else if (act === 'edit') {
+          state.provEditId = id;
+          await renderProvider();
+          document.getElementById('pv-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else if (act === 'del') {
+          if (!await confirmDialog('Hapus provider ini?', { kind: 'danger' })) return;
+          await api('/api/providers/' + id, { method: 'DELETE' });
+          if (state.provEditId === id) state.provEditId = null;
+          if (state.provTest?.id === id) state.provTest = { id: null, models: [] };
+          showToast('Provider dihapus', 'ok');
+          renderProvider();
         }
-        renderProvider();
-      } else if (act === 'use-model') {
-        const sel = document.getElementById('pv-modelsel-' + id);
-        if (!sel?.value) return;
-        await api('/api/providers/' + id, { method: 'PUT', body: { model: sel.value } });
-        showToast('Model diterapkan: ' + sel.value, 'ok');
-        state.provTest = { id: null, models: [] };
-        renderProvider();
-      } else if (act === 'edit') {
-        state.provEditId = id;
-        renderProvider();
-      } else if (act === 'del') {
-        if (!await confirmDialog('Hapus provider ini?', { kind: 'danger' })) return;
-        await api('/api/providers/' + id, { method: 'DELETE' });
-        showToast('Provider dihapus', 'ok');
-        renderProvider();
+      } catch (e) {
+        showToast('Gagal: ' + (e.message || e), 'err');
+        restore();
       }
     };
   });
@@ -2626,25 +2662,46 @@ async function renderProvider() {
   };
 
   document.getElementById('cf-save').onclick = async () => {
+    const urlEl = document.getElementById('cf-url');
+    const modelEl = document.getElementById('cf-model');
     const body = {
-      baseUrl: document.getElementById('cf-url').value.trim(),
-      model: document.getElementById('cf-model').value.trim(),
+      baseUrl: urlEl.value.trim(),
+      model: modelEl.value.trim(),
       label: document.getElementById('cf-label').value.trim(),
       presetKey: pSel.value,
     };
     const key = document.getElementById('cf-key').value.trim();
     if (key) body.apiKey = key;
+    urlEl.classList.remove('m-invalid');
+    modelEl.classList.remove('m-invalid');
+    if (!body.baseUrl || !body.model) {
+      if (!body.baseUrl) urlEl.classList.add('m-invalid');
+      if (!body.model) modelEl.classList.add('m-invalid');
+      showMsg('cf-msg', 'Base URL dan Model wajib diisi.', 'err');
+      return;
+    }
+    const saveBtn = document.getElementById('cf-save');
+    saveBtn.disabled = true;
     try {
       if (editing) await api('/api/providers/' + editing.id, { method: 'PUT', body });
       else await api('/api/providers', { method: 'POST', body });
       state.provEditId = null;
       renderProvider();
       showToast('Provider berhasil disimpan', 'ok');
-    } catch (e) { showMsg('cf-msg', e.message, 'err'); }
+    } catch (e) {
+      showMsg('cf-msg', e.message, 'err');
+      saveBtn.disabled = false;
+    }
   };
 
+  const cancelEdit = () => { state.provEditId = null; renderProvider(); };
   const cCancel = document.getElementById('cf-cancel');
-  if (cCancel) cCancel.onclick = () => { state.provEditId = null; renderProvider(); };
+  if (cCancel) cCancel.onclick = cancelEdit;
+  const cCancelTop = document.getElementById('cf-cancel-top');
+  if (cCancelTop) cCancelTop.onclick = cancelEdit;
+  ['cf-url', 'cf-model'].forEach((fid) => {
+    document.getElementById(fid)?.addEventListener('input', (e) => e.target.classList.remove('m-invalid'));
+  });
 
   document.getElementById('p-save-global').onclick = async () => {
     try {
