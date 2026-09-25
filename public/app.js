@@ -64,6 +64,8 @@ const SVG_ICONS = {
   wifi: `<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.86a10 10 0 0 1 14 0"/><path d="M8.5 16.43a5 5 0 0 1 7 0"/>`,
   zap: `<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>`,
   lock: `<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
+  eye: `<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>`,
+  'eye-off': `<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/>`,
   'chevron-right': `<polyline points="9 18 15 12 9 6"/>`,
   'chevron-down': `<polyline points="6 9 12 15 18 9"/>`,
   close: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
@@ -289,18 +291,18 @@ function openExecutionApprovalModal(defaultRouterId, commands, source = 'web') {
   const renderModalContent = () => {
     const r = state.routers.find((x) => x.id === targetRouterId) || state.routers[0];
     ov.innerHTML = `
-      <div class="modal" style="max-width:580px">
+      <div class="modal modal-narrow">
         <div class="modal-head">
           <h4>${icon('zap', '', 16)} Tinjau &amp; Setujui Eksekusi Konfigurasi</h4>
           <button class="ghost btn-sm" data-close>${icon('close', '', 14)}</button>
         </div>
         <div class="modal-body">
-          <div class="msg warn" style="margin-top:0">
+          <div class="msg warn">
             ${icon('shield-alert', '', 14)} <b>Human-in-the-Loop:</b> Perintah di bawah hanya akan dieksekusi ke RouterOS setelah Anda menekan tombol setujui di bawah.
           </div>
 
-          <label style="margin-top:10px">Pilih Router Target</label>
-          <select id="exec-target-router" style="margin-bottom:12px">
+          <label>Pilih Router Target</label>
+          <select id="exec-target-router">
             ${state.routers
               .map(
                 (x) => `<option value="${x.id}" ${x.id === targetRouterId ? 'selected' : ''}>${esc(x.name)} (${esc(x.host)})</option>`
@@ -309,17 +311,17 @@ function openExecutionApprovalModal(defaultRouterId, commands, source = 'web') {
           </select>
 
           <label>Daftar Baris Perintah RouterOS (${commands.length} baris):</label>
-          <div class="table-wrap" style="max-height:220px;overflow-y:auto;background:var(--bg-app);border-radius:var(--radius-sm);border:1px solid var(--border-medium);padding:10px">
-            <pre style="margin:0;font-size:12px;font-family:var(--font-mono);line-height:1.6"><code>${commands
+          <div class="exec-cmds">
+            <pre><code>${commands
               .map((c, idx) => `${idx + 1}. ${esc(c)}`)
               .join('\n')}</code></pre>
           </div>
 
-          <div id="exec-live-feedback" style="margin-top:12px"></div>
+          <div id="exec-live-feedback"></div>
         </div>
         <div class="dialog-actions">
           <button class="ghost" data-close>Batal</button>
-          <button class="primary" id="btn-exec-run" style="background:#10b981;border-color:#10b981">${icon('check', '', 13)} Setujui &amp; Jalankan Sekarang</button>
+          <button class="btn-exec" id="btn-exec-run">${icon('check', '', 13)} Setujui &amp; Jalankan Sekarang</button>
         </div>
       </div>
     `;
@@ -498,6 +500,7 @@ function renderLogin() {
   app.innerHTML = `
   <div class="login-wrap">
     <div class="login-card">
+      <div class="login-eyebrow">// konsol noc</div>
       <div class="login-brand">
         <div class="login-brand-icon">${icon('router', '', 24)}</div>
         <div>
@@ -506,15 +509,27 @@ function renderLogin() {
         </div>
       </div>
       <form id="login-form" onsubmit="return false;">
-        <label>Username</label>
+        <label for="u">Username</label>
         <input id="u" type="text" autocomplete="username" value="admin" required />
-        <label>Password</label>
-        <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        <label for="p">Password</label>
+        <div class="m-pass-wrap">
+          <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" required />
+          <button type="button" class="m-pass-toggle" id="login-pass-toggle" title="Tampilkan password" tabindex="-1">${icon('eye', '', 15)}</button>
+        </div>
         <div id="login-msg"></div>
         <button class="primary" id="login-btn" type="submit">Masuk ke Konsol</button>
       </form>
+      <div class="login-foot">read-only control plane · v0.2</div>
     </div>
   </div>`;
+
+  const loginPass = document.getElementById('p');
+  document.getElementById('login-pass-toggle').onclick = (e) => {
+    const show = loginPass.type === 'password';
+    loginPass.type = show ? 'text' : 'password';
+    e.currentTarget.innerHTML = icon(show ? 'eye-off' : 'eye', '', 15);
+    loginPass.focus();
+  };
 
   document.getElementById('login-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -860,7 +875,7 @@ async function renderDashboard() {
               <th>CPU Load</th>
               <th>RAM</th>
               <th>Sinkronisasi</th>
-              <th style="text-align:right">Aksi</th>
+              <th class="text-right">Aksi</th>
             </tr>
           </thead>
           <tbody>
@@ -869,7 +884,7 @@ async function renderDashboard() {
               const memUsed = h && h.freeMem != null && h.totalMem != null && h.totalMem > 0
                 ? Math.round((1 - h.freeMem / h.totalMem) * 100) : null;
               return `
-              <tr style="cursor:pointer" onclick="openRouter(state.routers.find(r => r.id === '${c.id}'))">
+              <tr class="row-click" onclick="openRouter(state.routers.find(r => r.id === '${c.id}'))">
                 <td><span class="pulse-dot ${c.connectionStatus === 'ok' ? 'online' : 'offline'}"></span></td>
                 <td><b>${esc(c.name)}</b></td>
                 <td>${esc(c.company || '—')}</td>
@@ -878,7 +893,7 @@ async function renderDashboard() {
                 <td>${h && h.cpu != null ? `${h.cpu}%` : '—'}</td>
                 <td>${memUsed != null ? `${memUsed}%` : '—'}</td>
                 <td><span class="badge ${c.stale || !c.hasContext ? 'stale' : 'ok'}">${!c.hasContext ? 'BELUM' : c.stale ? 'STALE' : 'SEGAR'}</span></td>
-                <td style="text-align:right" onclick="event.stopPropagation()">
+                <td class="text-right" onclick="event.stopPropagation()">
                   <button class="btn-sm" onclick="routerAction('${c.id}', 'sync')">${icon('refresh-cw', '', 12)}</button>
                   <button class="btn-sm" onclick="routerAction('${c.id}', 'test')">${icon('zap', '', 12)}</button>
                   <button class="btn-sm" onclick="openRouter(state.routers.find(r => r.id === '${c.id}'))">Buka</button>
@@ -1000,7 +1015,7 @@ function dashCardHtml(c) {
         <div class="dh-meter"><div class="dh-meter-fill ok" style="width:50%"></div></div>
       </div>
       <div class="dh-item">
-        <div class="dh-label-row"><span>UPTIME</span><b class="dh-val" style="font-size:11px">${esc(h?.uptime || '—')}</b></div>
+        <div class="dh-label-row"><span>UPTIME</span><b class="dh-val dh-val-sm">${esc(h?.uptime || '—')}</b></div>
         <div class="dh-meter"><div class="dh-meter-fill ok" style="width:100%"></div></div>
       </div>
     </div>
@@ -1017,7 +1032,7 @@ function dashCardHtml(c) {
           ${critical > 0 ? `${critical} Isu Kritis` : 'Audit Aman'}
         </span>
         ${audit.sev.medium ? `<span class="badge lvl-warn">${audit.sev.medium} Sedang</span>` : ''}
-      ` : '<span class="cell-muted" style="font-size:11px">Belum diaudit</span>'}
+      ` : '<span class="cell-muted text-xs">Belum diaudit</span>'}
     </div>
 
     <div class="dash-foot">
@@ -1035,53 +1050,80 @@ function openRouterForm(existing) {
   const mask = document.createElement('div');
   mask.className = 'modal-overlay';
   mask.innerHTML = `
-  <div class="modal dialog">
-    <div class="modal-head">
-      <h4>${r.id ? 'Edit Parameter Router' : 'Tambah Router MikroTik Baru'}</h4>
-      <button class="ghost btn-sm" id="f-close">${icon('close', '', 14)}</button>
-    </div>
-    <div class="modal-body">
-      <label>Nama Pengenal Router</label>
-      <input id="f-name" value="${esc(r.name || '')}" placeholder="misal: Core-Gateway-HQ" required />
-
-      <label>Nama Perusahaan / Organisasi</label>
-      <input id="f-company" value="${esc(r.company || '')}" placeholder="misal: PT. Mitra Network Solusi" />
-
-      <label>Host / Alamat IP Router</label>
-      <input id="f-host" value="${esc(r.host || '')}" placeholder="192.168.88.1" required />
-
-      <div class="row" style="margin-top:8px">
-        <div style="flex:1">
-          <label>Port API</label>
-          <input id="f-port" type="number" value="${r.api_port || 8728}" />
+  <div class="modal modal-router" role="dialog" aria-modal="true" aria-label="${r.id ? 'Edit router' : 'Tambah router'}">
+    <div class="modal-head m-router-head">
+      <div class="m-router-title">
+        <span class="m-router-icon">${icon('router', '', 20)}</span>
+        <div>
+          <h4>${r.id ? 'Edit Router' : 'Tambah Router'}</h4>
+          <p class="card-sub">RouterOS API · port 8728 plain / 8729 SSL</p>
         </div>
-        <div style="flex:1;padding-top:22px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      </div>
+      <button class="ghost btn-sm" id="f-close" title="Tutup">${icon('close', '', 14)}</button>
+    </div>
+    <div class="modal-body m-router-body">
+      <div class="m-eyebrow">// identitas</div>
+      <div class="m-grid">
+        <div class="m-field">
+          <label for="f-name">Nama router</label>
+          <input id="f-name" value="${esc(r.name || '')}" placeholder="Core-Gateway-HQ" required autocomplete="off" />
+        </div>
+        <div class="m-field">
+          <label for="f-company">Perusahaan</label>
+          <input id="f-company" value="${esc(r.company || '')}" placeholder="PT. Mitra Network" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="m-eyebrow">// koneksi api</div>
+      <div class="m-field">
+        <label for="f-host">Host / IP router</label>
+        <input id="f-host" class="mono" value="${esc(r.host || '')}" placeholder="192.168.88.1" required autocomplete="off" inputmode="decimal" />
+      </div>
+      <div class="m-grid m-grid-port">
+        <div class="m-field">
+          <label for="f-port">Port API</label>
+          <input id="f-port" class="mono" type="number" value="${r.api_port || 8728}" min="1" max="65535" />
+        </div>
+        <div class="m-field m-field-secure">
+          <label class="m-secure-card" id="f-secure-card" title="Aktifkan untuk koneksi TLS terenkripsi">
             <input type="checkbox" id="f-secure" ${r.secure ? 'checked' : ''} />
-            <span>Gunakan API-SSL (8729)</span>
+            <span class="m-secure-txt"><b>API-SSL</b><small>Terenkripsi (TLS)</small></span>
+            <span class="m-secure-pill mono" id="f-secure-pill">${r.secure ? '8729' : '8728'}</span>
           </label>
         </div>
       </div>
 
-      <label>Username API</label>
-      <input id="f-user" value="${esc(r.username || '')}" placeholder="admin" autocomplete="off" required />
-
-      <label>Password API ${r.id ? '<small class="cell-muted">(kosongkan jika tidak diubah)</small>' : ''}</label>
-      <input id="f-pass" type="password" autocomplete="new-password" placeholder="kosongkan jika router tanpa password" />
-
-      <div style="margin-top:10px;font-size:11.5px;color:var(--text-secondary);background:var(--bg-app);padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);line-height:1.5">
-        💡 <b>Catatan Koneksi MikroTik API:</b><br/>
-        • Pastikan API aktif di router: <code>/ip service enable api</code> (port 8728).<br/>
-        • Pastikan firewall tidak memblokir: <code>/ip firewall filter add chain=input protocol=tcp dst-port=8728 action=accept place-before=1</code>.<br/>
-        • Jika memakai Docker di Ubuntu, pastikan host/IP router dapat di-ping dari server.
+      <div class="m-eyebrow">// kredensial</div>
+      <div class="m-grid">
+        <div class="m-field">
+          <label for="f-user">Username</label>
+          <input id="f-user" value="${esc(r.username || '')}" placeholder="admin" autocomplete="off" required />
+        </div>
+        <div class="m-field">
+          <label for="f-pass">Password</label>
+          <div class="m-pass-wrap">
+            <input id="f-pass" type="password" autocomplete="new-password" placeholder="${r.id ? 'Kosongkan jika tidak diubah' : '••••••••'}" />
+            <button type="button" class="m-pass-toggle" id="f-pass-toggle" title="Tampilkan password" tabindex="-1">${icon('eye', '', 15)}</button>
+          </div>
+        </div>
       </div>
 
-      <div id="router-form-msg" style="margin-top:10px"></div>
+      <div class="m-hint">
+        <span class="m-hint-icon">${icon('info', '', 15)}</span>
+        <div>
+          <b>Sebelum Tes Koneksi, pastikan di router:</b>
+          <span><code>/ip service enable api</code> aktif · firewall izinkan <code>tcp/8728</code> · user punya policy <code>api</code></span>
+        </div>
+      </div>
+
+      <div id="router-form-msg"></div>
     </div>
-    <div class="dialog-actions">
-      <button class="ghost" id="f-cancel">Batal</button>
+    <div class="dialog-actions m-router-foot">
       <button class="ghost" id="f-test">${icon('zap', '', 13)} Tes Koneksi</button>
-      <button class="primary" id="f-save">${icon('check', '', 13)} Simpan</button>
+      <div class="m-foot-right">
+        <button class="ghost" id="f-cancel">Batal</button>
+        <button class="primary" id="f-save">${icon('check', '', 13)} ${r.id ? 'Simpan Perubahan' : 'Tambah Router'}</button>
+      </div>
     </div>
   </div>`;
 
@@ -1089,14 +1131,44 @@ function openRouterForm(existing) {
   const close = () => mask.remove();
   mask.querySelector('#f-close').onclick = close;
   mask.querySelector('#f-cancel').onclick = close;
+  mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
 
   const secBox = mask.querySelector('#f-secure');
   const portIn = mask.querySelector('#f-port');
-  secBox.onchange = () => {
+  const secCard = mask.querySelector('#f-secure-card');
+  const secPill = mask.querySelector('#f-secure-pill');
+  const syncSecure = () => {
     const cur = Number(portIn.value || 8728);
     if (secBox.checked && (cur === 8728 || !cur)) portIn.value = 8729;
     else if (!secBox.checked && (cur === 8729 || !cur)) portIn.value = 8728;
+    secCard.classList.toggle('on', secBox.checked);
+    secPill.textContent = secBox.checked ? '8729' : '8728';
   };
+  secBox.onchange = syncSecure;
+  syncSecure();
+
+  // Reveal password + autofocus + Enter-to-save + invalid highlight
+  const passIn = mask.querySelector('#f-pass');
+  const passToggle = mask.querySelector('#f-pass-toggle');
+  passToggle.onclick = () => {
+    const show = passIn.type === 'password';
+    passIn.type = show ? 'text' : 'password';
+    passToggle.innerHTML = icon(show ? 'eye-off' : 'eye', '', 15);
+    passToggle.title = show ? 'Sembunyikan password' : 'Tampilkan password';
+    passIn.focus();
+  };
+  const nameIn = mask.querySelector('#f-name');
+  setTimeout(() => nameIn.focus(), 50);
+  mask.querySelectorAll('input').forEach((el) => {
+    el.addEventListener('input', () => el.classList.remove('m-invalid'));
+  });
+  mask.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { close(); return; }
+    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      mask.querySelector('#f-save').click();
+    }
+  });
 
   const testBtn = mask.querySelector('#f-test');
   const saveBtn = mask.querySelector('#f-save');
@@ -1134,7 +1206,10 @@ function openRouterForm(existing) {
       password: mask.querySelector('#f-pass').value,
     };
     if (!body.name || !body.host || !body.username) {
-      showMsg('router-form-msg', 'Nama, Host/IP, dan Username wajib diisi.', 'err');
+      if (!body.name) mask.querySelector('#f-name').classList.add('m-invalid');
+      if (!body.host) mask.querySelector('#f-host').classList.add('m-invalid');
+      if (!body.username) mask.querySelector('#f-user').classList.add('m-invalid');
+      showMsg('router-form-msg', 'Lengkapi nama, host/IP, dan username dahulu.', 'err');
       return;
     }
     saveBtn.disabled = true;
@@ -1302,12 +1377,12 @@ async function renderStatusTab(body) {
         <h4>Status Perangkat</h4>
         <span class="badge failed">OFFLINE / TIDAK TERHUBUNG</span>
       </div>
-      <p style="color:var(--text-secondary);margin-bottom:10px">Router tidak dapat dihubungi melalui RouterOS API.</p>
-      <div style="background:var(--bg-app);border-left:3px solid var(--danger);padding:10px 12px;border-radius:var(--radius-sm);font-size:12.5px;line-height:1.5;color:var(--text-primary);margin-bottom:14px">
+      <p class="offline-lead">Router tidak dapat dihubungi melalui RouterOS API.</p>
+      <div class="offline-box">
         <b>Penyebab Kendala:</b><br/>
         <span>${esc(errText)}</span>
       </div>
-      <div class="row" style="margin-top:14px">
+      <div class="btn-row">
         <button class="primary" onclick="routerAction('${esc(state.router?.id)}','test')">${icon('zap', '', 13)} Uji Koneksi</button>
         <button onclick="routerAction('${esc(state.router?.id)}','sync')">${icon('refresh-cw', '', 13)} Coba Sync Lagi</button>
         <button class="ghost" onclick="openRouterForm(state.router)">${icon('edit', '', 13)} Edit Parameter</button>
@@ -1340,19 +1415,19 @@ async function renderStatusTab(body) {
 
     <div class="telemetry-card">
       <div class="tc-head"><span>Resource Tersinkron</span> ${icon('terminal', '', 14)}</div>
-      <div class="tc-value">${okCount} <span style="font-size:14px;color:var(--text-muted)">/ ${sum.length}</span></div>
+      <div class="tc-value">${okCount} <span class="tc-value-suffix">/ ${sum.length}</span></div>
       <small class="cell-muted">${sum.length - okCount} resource gagal / tak didukung</small>
     </div>
 
     <div class="telemetry-card">
       <div class="tc-head"><span>Host &amp; Port</span> ${icon('wifi', '', 14)}</div>
-      <div class="tc-value" style="font-size:16px;font-family:var(--font-mono)">${esc(ov.router.host)}</div>
+      <div class="tc-value-sm tc-value-mono">${esc(ov.router.host)}</div>
       <small class="cell-muted">Port ${ov.router.api_port} ${ov.router.secure ? '(SSL Aktif)' : ''}</small>
     </div>
 
     <div class="telemetry-card">
       <div class="tc-head"><span>Entitas Perusahaan</span> ${icon('shield', '', 14)}</div>
-      <div class="tc-value" style="font-size:16px">${esc(ov.router.company || '—')}</div>
+      <div class="tc-value-sm">${esc(ov.router.company || '—')}</div>
       <small class="cell-muted">Identitas terdaftar</small>
     </div>
   </div>
@@ -1378,7 +1453,7 @@ async function renderStatusTab(body) {
         <p class="card-sub">Daftar resource RouterOS yang dikumpulkan secara read-only untuk analisis AI</p>
       </div>
       <div class="row">
-        <input style="max-width:240px;margin:0" id="res-search" type="search" placeholder="Filter resource (misal: firewall)..." value="${esc(state.resourceSearch)}" />
+        <input class="res-search" id="res-search" type="search" placeholder="Filter resource (misal: firewall)..." value="${esc(state.resourceSearch)}" />
       </div>
     </div>
 
@@ -1432,10 +1507,10 @@ async function renderStandaloneChat() {
   const content = document.getElementById('content');
   if (!state.routers || state.routers.length === 0) {
     content.innerHTML = `
-      <div class="card" style="padding:48px 24px;text-align:center;">
-        <div style="font-size:36px;margin-bottom:12px;">🔌</div>
-        <h3 style="font-size:16px;font-weight:600;margin-bottom:6px;">Belum Ada Router Terdaftar</h3>
-        <p class="muted" style="margin:0 auto 16px;max-width:400px;font-size:13px;">Tambahkan router MikroTik terlebih dahulu untuk mulai berkonsultasi dengan AI Copilot.</p>
+      <div class="card empty-hero">
+        <div class="empty-hero-icon">${icon('router', '', 26)}</div>
+        <h3>Belum Ada Router Terdaftar</h3>
+        <p class="muted">Tambahkan router MikroTik terlebih dahulu untuk mulai berkonsultasi dengan AI Copilot.</p>
         <button class="primary" onclick="openRouterForm()">${icon('plus', '', 14)} Tambah Router</button>
       </div>`;
     return;
@@ -1446,12 +1521,11 @@ async function renderStandaloneChat() {
   }
 
   content.innerHTML = `
-    <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div class="page-head">
       <div>
-        <h2 style="margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px;">
-          ${icon('message-square', 'blue', 18)} AI Copilot Konsultasi Router
-        </h2>
-        <p class="muted" style="margin:3px 0 0;font-size:12.5px;">Tanya jawab, analisis konfigurasi, dan diagnosis cerdas router MikroTik Anda.</p>
+        <div class="page-eyebrow">// ai copilot</div>
+        <h2 class="page-title">${icon('message-square', '', 18)} Konsultasi Router</h2>
+        <p class="page-desc">Tanya jawab, analisis konfigurasi, dan diagnosis cerdas router MikroTik Anda.</p>
       </div>
     </div>
     <div id="standalone-chat-body"></div>`;
@@ -1466,10 +1540,10 @@ async function renderChatTab(body) {
       state.router = state.routers[0];
     } else {
       body.innerHTML = `
-        <div class="card" style="padding:48px 24px;text-align:center;">
-          <div style="font-size:36px;margin-bottom:12px;">🔌</div>
-          <h3 style="font-size:16px;font-weight:600;margin-bottom:6px;">Belum Ada Router Terdaftar</h3>
-          <p class="muted" style="margin:0 auto 16px;max-width:400px;font-size:13px;">Tambahkan router MikroTik terlebih dahulu untuk mulai menggunakan AI Copilot.</p>
+        <div class="card empty-hero">
+          <div class="empty-hero-icon">${icon('router', '', 26)}</div>
+          <h3>Belum Ada Router Terdaftar</h3>
+          <p class="muted">Tambahkan router MikroTik terlebih dahulu untuk mulai menggunakan AI Copilot.</p>
           <button class="primary" onclick="openRouterForm()">${icon('plus', '', 14)} Tambah Router</button>
         </div>`;
       return;
@@ -1492,7 +1566,7 @@ async function renderChatTab(body) {
       <div class="chat-header">
         <div class="chat-header-title">
           ${icon('zap', '', 16)}
-          <span style="font-weight:600">AI Copilot:</span>
+          <span class="chat-title-label">AI Copilot:</span>
           <select id="chat-router-switcher" class="chat-router-select" title="Pilih router target untuk AI Copilot">
             ${(state.routers || []).map((r) => `<option value="${esc(r.id)}" ${r.id === state.router.id ? 'selected' : ''}>${esc(r.name)}${r.company ? ` (${esc(r.company)})` : ''}</option>`).join('')}
           </select>
@@ -1636,7 +1710,7 @@ async function renderChatTab(body) {
       const data = await api(`/api/chats/${state.chat.id}`);
       state.messages = data.messages;
     } catch (e) {
-      sb.msgEl.innerHTML = `<span style="color:var(--color-danger)">${esc(e.message || 'Gagal menghubungi AI')}</span>`;
+      sb.msgEl.innerHTML = `<span class="text-danger">${esc(e.message || 'Gagal menghubungi AI')}</span>`;
     } finally {
       send.busy = false;
       msgsBox.scrollTop = msgsBox.scrollHeight;
@@ -1823,9 +1897,9 @@ async function renderAuditTab(body) {
 
     <!-- Live Streaming Audit Box -->
     <div id="audit-run-box" style="display:none" class="audit-progress-box">
-      <div class="flex items-center justify-between">
-        <span id="audit-status-text" style="font-weight:600;font-size:13px">Menyiapkan audit...</span>
-        <span id="audit-percent-text" class="mono" style="font-size:12px;color:var(--primary)">15%</span>
+      <div class="audit-live-row">
+        <span id="audit-status-text" class="audit-live-label">Menyiapkan audit...</span>
+        <span id="audit-percent-text" class="audit-live-pct">15%</span>
       </div>
       <div class="progress-bar-track">
         <div class="progress-bar-fill" id="audit-progress-bar" style="width:15%"></div>
@@ -1848,7 +1922,7 @@ async function renderAuditTab(body) {
               <th>Waktu Audit</th>
               <th>Jenis Audit</th>
               <th>Status Hasil</th>
-              <th style="text-align:right">Aksi Laporan</th>
+              <th class="text-right">Aksi Laporan</th>
             </tr>
           </thead>
           <tbody>
@@ -1857,7 +1931,7 @@ async function renderAuditTab(body) {
                 <td class="cell-muted">${fmtTs(a.created_at)}</td>
                 <td><b>${esc(AUDIT_KIND_LABEL[a.audit_type] || a.audit_type)}</b></td>
                 <td><span class="badge ${a.ok ? 'ok' : 'failed'}">${a.ok ? 'Sukses' : 'Gagal'}</span></td>
-                <td style="text-align:right">
+                <td class="text-right">
                   <button class="btn-sm" data-audit-view="${a.id}" ${a.ok ? '' : 'disabled'}>${icon('file-text', '', 12)} Lihat</button>
                   <button class="btn-sm" data-audit-pdf="${a.id}" ${a.ok ? '' : 'disabled'}>${icon('download', '', 12)} PDF</button>
                   <button class="btn-sm danger" data-audit-del="${a.id}">${icon('trash', '', 12)}</button>
@@ -2106,7 +2180,7 @@ async function openAuditView(id) {
     const ov = document.createElement('div');
     ov.className = 'modal-overlay';
     ov.innerHTML = `
-      <div class="modal" style="max-width:820px">
+      <div class="modal modal-wide">
         <div class="modal-head">
           <div>
             <h4>${esc(AUDIT_KIND_LABEL[a.audit_type] || a.audit_type)}</h4>
@@ -2136,16 +2210,17 @@ async function renderDiscover() {
   content.innerHTML = `
   <div class="radar-box">
     <div class="radar-ring" id="radar-ring">${icon('wifi', '', 28)}</div>
-    <h3>Pemindai Jaringan MNDP (MikroTik Neighbor Discovery)</h3>
-    <p style="color:var(--text-secondary);max-width:540px;margin:0 auto 16px">
+    <div class="page-eyebrow text-center">// mndp scanner</div>
+    <h3>Pemindai Jaringan MNDP</h3>
+    <p class="discover-lead">
       Mendeteksi router MikroTik di domain broadcast Layer-2 lokal yang sama (serupa menu Neighbors di Winbox).
     </p>
-    <div class="row" style="justify-content:center">
+    <div class="discover-actions">
       <button class="primary" id="dis-scan">${icon('wifi', '', 14)} Pindai Jaringan Sekarang</button>
       <button id="dis-cancel" style="display:none" class="danger">Batal</button>
       <button id="dis-reset" style="display:none" class="ghost">Bersihkan</button>
     </div>
-    <div id="dis-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)"></div>
+    <div id="dis-status" class="discover-status"></div>
   </div>
 
   <div class="card">
@@ -2191,7 +2266,7 @@ async function renderDiscover() {
                 <th>Versi ROS</th>
                 <th>Model Hardware</th>
                 <th>Status Port API</th>
-                <th style="text-align:right">Aksi</th>
+                <th class="text-right">Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -2204,7 +2279,7 @@ async function renderDiscover() {
                   <td>
                     ${d.apiPort ? `<span class="badge ok">Port ${d.apiPort}</span>` : d.apiSsl ? '<span class="badge lvl-warn">SSL Only</span>' : '<span class="cell-muted">Tertutup</span>'}
                   </td>
-                  <td style="text-align:right">
+                  <td class="text-right">
                     <button class="primary btn-sm" data-add-ip="${esc(d.ip)}" data-add-name="${esc(d.identity || '')}">
                       ${icon('plus', '', 12)} Tambah ke Routers
                     </button>
@@ -2273,8 +2348,8 @@ async function renderConfig() {
                 <b>${esc(t.label)}</b>
               </div>
             </div>
-            <p class="cell-muted" style="font-size:12.5px;margin:4px 0 10px">${esc(t.desc)}</p>
-            <div class="dash-foot" style="margin-top:auto;border:none;padding:0">
+            <p class="cell-muted tpl-desc">${esc(t.desc)}</p>
+            <div class="dash-foot tpl-foot">
               <span class="cell-muted">Pilih skenario</span>
               <span class="dash-go">Konfigurasi ${icon('arrow-right', '', 13)}</span>
             </div>
@@ -2297,7 +2372,7 @@ async function renderConfig() {
 
   if (state.config.script !== null) {
     content.innerHTML = `
-    <div class="card" style="max-width:880px">
+    <div class="card form-wide">
       <div class="card-title">
         <div>
           <h4>${esc(t.label)} — Hasil Skrip RouterOS</h4>
@@ -2308,10 +2383,10 @@ async function renderConfig() {
 
       <pre class="script-box">${esc(state.config.script)}</pre>
 
-      <div class="row" style="margin-top:14px">
+      <div class="btn-row">
         <button class="primary" id="cfg-copy">${icon('copy', '', 14)} Salin Skrip</button>
         <button id="cfg-download">${icon('download', '', 14)} Unduh .rsc</button>
-        <button class="primary" id="cfg-exec" style="background:#10b981;border-color:#10b981">${icon('zap', '', 14)} Ajukan Eksekusi</button>
+        <button class="btn-exec" id="cfg-exec">${icon('zap', '', 14)} Ajukan Eksekusi</button>
         <button id="cfg-back" class="ghost">${icon('edit', '', 14)} Ubah Parameter</button>
         <button id="cfg-new" class="ghost">Pilih Template Lain</button>
       </div>
@@ -2346,18 +2421,18 @@ async function renderConfig() {
   // Parameter Form
   const val = (id, dft) => (state.config.values[id] !== undefined ? state.config.values[id] : dft);
   content.innerHTML = `
-  <div class="card" style="max-width:680px">
+  <div class="card form-narrow">
     <div class="card-title">
       <h4>${esc(t.label)}</h4>
       <button class="ghost btn-sm" id="cfg-tpl-back">← Ganti Template</button>
     </div>
-    <p style="color:var(--text-secondary);margin-bottom:16px">${esc(t.desc)}</p>
+    <p class="offline-lead">${esc(t.desc)}</p>
 
     <div id="cfg-form">
       ${t.params.map((p) => `
         ${p.type === 'bool' ? `
-          <div style="margin:12px 0">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <div class="check-row">
+            <label>
               <input type="checkbox" data-p="${p.id}" ${val(p.id, p.default) ? 'checked' : ''} />
               <span><b>${esc(p.label)}</b></span>
             </label>
@@ -2375,7 +2450,7 @@ async function renderConfig() {
       `).join('')}
     </div>
 
-    <div class="row" style="margin-top:16px">
+    <div class="btn-row">
       <button class="primary" id="cfg-gen">${icon('terminal', '', 14)} Generate Skrip RouterOS</button>
     </div>
     <div id="cfg-msg"></div>
@@ -2426,14 +2501,14 @@ async function renderProvider() {
         <p class="card-sub">Pilih salah satu provider sebagai engine AI aktif untuk fitur Chat Copilot dan Audit Keamanan.</p>
         <div id="pv-msg"></div>
 
-        <div style="margin-top:14px">
+        <div class="pv-list">
           ${provs.map((p) => `
             <div class="pv-row ${p.active ? 'pv-active' : ''}">
               <div class="pv-head">
                 ${p.active ? '<span class="badge ok">AKTIF</span>' : ''}
                 <b>${esc(p.label)}</b>
               </div>
-              <div class="mono cell-muted" style="font-size:12px">${esc(p.baseUrl)} · model: <b>${esc(p.model)}</b></div>
+              <div class="mono cell-muted pv-meta">${esc(p.baseUrl)} · model: <b>${esc(p.model)}</b></div>
               <small class="cell-muted">${p.hasKey ? '✓ API key tersimpan (' + esc(p.keyPreview) + ')' : '✕ API key belum diisi'}</small>
 
               <div class="pv-actions">
@@ -2480,7 +2555,7 @@ async function renderProvider() {
 
         <div id="cf-msg"></div>
 
-        <div class="row" style="margin-top:14px">
+        <div class="btn-row">
           <button class="primary" id="cf-save">${icon('check', '', 13)} ${editing ? 'Simpan Perubahan' : 'Tambah Provider'}</button>
           ${editing ? '<button id="cf-cancel" class="ghost">Batal</button>' : ''}
         </div>
@@ -2488,8 +2563,8 @@ async function renderProvider() {
 
       <div class="card">
         <h4>Pengaturan Konteks Global</h4>
-        <div class="row" style="margin:10px 0">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+        <div class="check-row">
+          <label>
             <input type="checkbox" id="p-stream" ${data.streaming ? 'checked' : ''} />
             <span>Aktifkan Real-Time Streaming (SSE)</span>
           </label>
@@ -2497,7 +2572,7 @@ async function renderProvider() {
         <label>Batas Maksimum Karakter Konteks Router</label>
         <input id="p-ctx" type="number" value="${data.maxContext || 80000}" min="10000" step="5000" />
         <div id="p-msg"></div>
-        <button class="primary btn-sm" id="p-save-global" style="margin-top:10px">${icon('check', '', 12)} Simpan Preferensi</button>
+        <button class="primary btn-sm mt-3" id="p-save-global">${icon('check', '', 12)} Simpan Preferensi</button>
       </div>
     </div>
   </div>`;
@@ -2610,7 +2685,14 @@ async function renderSettings() {
     : `<span class="badge neutral">⚪ Nonaktif</span>`;
 
   content.innerHTML = `
-  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(420px, 1fr));gap:16px;max-width:1100px">
+  <div class="page-head">
+    <div>
+      <div class="page-eyebrow">// administrasi</div>
+      <h2 class="page-title">${icon('settings', '', 18)} Pengaturan Sistem</h2>
+      <p class="page-desc">Mode eksekusi, integrasi Telegram, kredensial admin, dan info keamanan.</p>
+    </div>
+  </div>
+  <div class="settings-grid">
     
     <!-- Card 1: Execution Control -->
     <div class="card">
@@ -2622,7 +2704,7 @@ async function renderSettings() {
         ${icon('zap', '', 18)}
       </div>
 
-      <div class="msg ${execSetting.enabled ? 'ok' : 'warn'}" style="margin-top:0">
+      <div class="msg ${execSetting.enabled ? 'ok' : 'warn'}">
         ${execSetting.enabled ? icon('shield-check', '', 15) : icon('shield-alert', '', 15)}
         <b>${execSetting.enabled ? 'Mode Eksekusi Terbimbing Aktif' : 'Mode 100% Read-Only Aktif'}:</b>
         ${execSetting.enabled
@@ -2630,18 +2712,18 @@ async function renderSettings() {
           : 'Aplikasi beroperasi murni konsultatif. Segala aksi eksekusi diblokir sepenuhnya.'}
       </div>
 
-      <div style="margin:16px 0">
+      <div class="mt-4">
         <label class="toggle-wrap">
           <span class="toggle-switch">
             <input type="checkbox" id="setting-exec-toggle" ${execSetting.enabled ? 'checked' : ''} />
             <span class="toggle-slider"></span>
           </span>
-          <span style="font-weight:600;font-size:13.5px">Izinkan Eksekusi Konfigurasi (Wajib Lewat Approval Admin)</span>
+          <span class="toggle-label">Izinkan Eksekusi Konfigurasi (Wajib Lewat Approval Admin)</span>
         </label>
       </div>
 
       <div id="exec-setting-msg"></div>
-      <button class="primary" id="btn-save-exec" style="margin-top:10px">${icon('check', '', 13)} Simpan Pengaturan Eksekusi</button>
+      <button class="primary mt-3" id="btn-save-exec">${icon('check', '', 13)} Simpan Pengaturan Eksekusi</button>
     </div>
 
     <!-- Card 2: Telegram Bot Integration -->
@@ -2654,43 +2736,43 @@ async function renderSettings() {
         ${tgStatusBadge}
       </div>
 
-      <div style="margin:14px 0">
+      <div class="mt-4">
         <label class="toggle-wrap">
           <span class="toggle-switch">
             <input type="checkbox" id="setting-tg-toggle" ${tgSetting.enabled ? 'checked' : ''} />
             <span class="toggle-slider"></span>
           </span>
-          <span style="font-weight:600;font-size:13.5px">Aktifkan Bot Telegram (Long Polling)</span>
+          <span class="toggle-label">Aktifkan Bot Telegram (Long Polling)</span>
         </label>
       </div>
 
       <label>HTTP API Token Bot Telegram (dari @BotFather)</label>
       <input id="tg-token" type="password" placeholder="${tgSetting.tokenPreview ? 'Tersimpan: ' + tgSetting.tokenPreview : '7123456789:AAH...'}" />
 
-      <label style="margin-top:10px">Whitelist Chat ID / Group ID (Dipisahkan koma)</label>
+      <label>Whitelist Chat ID / Group ID (Dipisahkan koma)</label>
       <input id="tg-chats" type="text" placeholder="Contoh: 123456789, -1001234567890" value="${esc(tgSetting.allowedChats || '')}" />
-      <p class="cell-muted" style="font-size:11.5px;margin-top:2px">ID Pribadi (angka positif, misal <code>123456789</code>) atau ID Grup (angka minus, misal <code>-1001234567890</code>). Tanda minus <b>-</b> wajib disertakan.</p>
+      <p class="hint-line cell-muted">ID Pribadi (angka positif, misal <code>123456789</code>) atau ID Grup (angka minus, misal <code>-1001234567890</code>). Tanda minus <b>-</b> wajib disertakan.</p>
 
-      <label style="margin-top:10px">Router Default Sesi Chat</label>
+      <label>Router Default Sesi Chat</label>
       <select id="tg-def-router">
         <option value="">— Otomatis (Gunakan Router Pertama) —</option>
         ${state.routers.map((r) => `<option value="${r.id}" ${r.id === tgSetting.defaultRouterId ? 'selected' : ''}>${esc(r.name)} (${esc(r.host)})</option>`).join('')}
       </select>
 
-      <div id="tg-setting-msg" style="margin-top:10px"></div>
+      <div id="tg-setting-msg"></div>
 
-      <div class="row" style="margin-top:14px">
+      <div class="btn-row">
         <button class="primary" id="btn-save-tg">${icon('check', '', 13)} Simpan Pengaturan Telegram</button>
         <button id="btn-test-tg" class="ghost">${icon('refresh-cw', '', 13)} Tes Bot &amp; Kirim Pesan Uji</button>
       </div>
 
-      <details style="margin-top:16px;font-size:12.5px;color:var(--text-secondary);background:var(--bg-app);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle)">
-        <summary style="cursor:pointer;font-weight:600;color:var(--primary)">📖 Panduan Penggunaan &amp; Chat ID Grup / Akun Pribadi</summary>
-        <ol style="margin:8px 0 0 16px;padding:0;line-height:1.7">
+      <details class="guide-box">
+        <summary>Panduan Penggunaan &amp; Chat ID Grup / Akun Pribadi</summary>
+        <ol>
           <li><b>Buat Bot:</b> Buka Telegram, cari <b>@BotFather</b> lalu ketik <code>/newbot</code>. Salin Token API yang diberikan.</li>
           <li><b>Chat ID Pribadi:</b> Cari bot <b>@userinfobot</b> di Telegram untuk melihat <b>ID</b> angka Anda (contoh: <code>123456789</code>).</li>
           <li><b>Chat ID Grup (Tanda Minus):</b>
-            <div style="margin-top:2px">
+            <div class="mt-2">
               • ID grup Telegram selalu diawali tanda minus <code>-</code> (grup standar) atau <code>-100</code> (supergroup), contoh: <code>-1001987654321</code>.<br/>
               • <i>Cara dapat ID grup:</i> Masukkan bot <b>@RawDataBot</b> ke grup Anda, salin nilai <code>chat -&gt; id</code> yang bernilai minus, lalu keluarkan kembali bot tersebut.<br/>
               • <i>Setting BotFather untuk Grup:</i> Buka <b>@BotFather</b> &rarr; ketik <code>/mybots</code> &rarr; pilih bot Anda &rarr; <b>Bot Settings</b> &rarr; <b>Group Privacy</b> &rarr; <b>Turn off</b> (Disabled) agar bot bisa merespons chat anggota di grup.
@@ -2712,17 +2794,17 @@ async function renderSettings() {
       <label>Password Saat Ini</label>
       <input id="s-cur" type="password" required />
 
-      <label style="margin-top:10px">Password Baru (Minimal 4 Karakter)</label>
+      <label>Password Baru (Minimal 4 Karakter)</label>
       <input id="s-new" type="password" required />
 
       <div id="settings-msg"></div>
-      <button class="primary" id="s-save" style="margin-top:14px">${icon('check', '', 13)} Simpan Password Baru</button>
+      <button class="primary mt-4" id="s-save">${icon('check', '', 13)} Simpan Password Baru</button>
     </div>
 
     <!-- Card 4: System Info -->
     <div class="card">
       <h4>Informasi Sistem &amp; Keamanan</h4>
-      <div class="cell-muted" style="font-size:12.5px;line-height:1.8;margin-top:10px">
+      <div class="sysinfo">
         <div>Aplikasi: <b>AI MikroTik Assistant v0.2</b></div>
         <div>Arsitektur Keamanan: <b>Human-in-the-Loop Approval Gated</b></div>
         <div>Enkripsi Kredensial &amp; Token: <b>AES-256-GCM Hardware-Accelerated</b></div>
@@ -2835,13 +2917,13 @@ async function renderLogs() {
         <p class="card-sub">${total} peristiwa tercatat · Seluruh kredensial dan rahasia otomatis diredaksi</p>
       </div>
       <div class="row">
-        <select id="log-filter" style="width:auto;margin:0">
+        <select id="log-filter" class="auto-width">
           <option value="">Semua Level</option>
           <option value="info">Info</option>
           <option value="warn">Warning</option>
           <option value="error">Error</option>
         </select>
-        <select id="log-size" style="width:auto;margin:0">
+        <select id="log-size" class="auto-width">
           ${[25, 50, 100].map((n) => `<option value="${n}" ${n === logPageSize ? 'selected' : ''}>${n} baris</option>`).join('')}
         </select>
       </div>
@@ -2865,7 +2947,7 @@ async function renderLogs() {
           <tbody>
             ${logs.map((l) => `
               <tr class="log-row" data-level="${l.level}">
-                <td style="white-space:nowrap">${esc(fmtTs(l.ts))}</td>
+                <td class="nowrap">${esc(fmtTs(l.ts))}</td>
                 <td><span class="badge lvl-${l.level}">${l.level}</span></td>
                 <td><b>${esc(l.event)}</b></td>
                 <td>${esc(l.operation)}</td>
