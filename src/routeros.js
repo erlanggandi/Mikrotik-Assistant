@@ -578,8 +578,8 @@ export function wordsToAttrs(sentence) {
 
 export function friendlyRouterError(msg, host, port) {
   const m = String(msg || '').toLowerCase();
-  if (/invalid user name or password|login failed|authentication failed/i.test(m)) {
-    return 'Username atau password router salah. Periksa akun di menu System -> Users pada MikroTik.';
+  if (/invalid user name or password|login failed|authentication failed|wrong password|incorrect username|no such user|invalid username/i.test(m)) {
+    return 'Username atau password router salah. Periksa akun di menu System -> Users pada MikroTik. Checklist: (1) username persis (case-sensitive), ketik ulang password jangan copy-paste; (2) user/group punya hak API (System -> Users -> Groups, pastikan policy api/read/write); (3) IP service API aktif: /ip service enable api, port 8728 (plain) atau 8729 (API-SSL), address 0.0.0.0/0 atau IP server ini; (4) jika baru Edit router di aplikasi, isi ulang password lalu Simpan (bug versi lama merusak password tersimpan); (5) coba login yang sama via Winbox untuk memastikan kredensial valid.';
   }
   if (/econnrefused/i.test(m)) {
     return `Koneksi ke port ${port || 8728} pada ${host} ditolak (ECONNREFUSED). Pastikan API MikroTik aktif (/ip service enable api) dan parameter address di service API tidak membatasi IP server ini.`;

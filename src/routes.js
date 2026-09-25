@@ -130,6 +130,12 @@ function decryptPw(r) {
   return decryptSecret(r.password_enc, r.password_iv);
 }
 
+function isStoredPasswordCorrupted(r) {
+  if (!r) return false;
+  if (!r.password_enc) return false;
+  return !decryptSecret(r.password_enc, r.password_iv);
+}
+
 function publicRouter(r) {
   if (!r) return null;
   return {
@@ -140,7 +146,8 @@ function publicRouter(r) {
     api_port: r.api_port,
     secure: !!r.secure,
     username: r.username,
-    hasPassword: !!(r.password_enc && decryptSecret(r.password_enc, r.password_iv)),
+    hasPassword: !!r.password_enc,
+    passwordCorrupted: isStoredPasswordCorrupted(r),
     connection_status: r.connection_status,
     last_sync: r.last_sync,
     last_error: r.last_error,
@@ -151,6 +158,13 @@ function publicRouter(r) {
 // Cek koneksi LANGSUNG ke router. Returns null jika online; String error jika offline/terkoneksi gagal.
 // Status koneksi di DB diperbarui, dan last_error dicatat agar UI bisa menampilkan alasan.
 async function requireOnline(router) {
+  const rawRow = db.prepare('SELECT * FROM routers WHERE id=?').get(router.id);
+  if (rawRow && isStoredPasswordCorrupted(rawRow)) {
+    const msg = 'Password tersimpan rusak / tidak bisa didekripsi (kemungkinan akibat bug Edit router versi lama atau kunci enkripsi berubah). Silakan Edit router lalu isi ulang password dan Simpan.';
+    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(msg, router.id);
+    logger.warn({ event: 'connection_test', operation: 'requireOnline', result: 'failed', routerId: router.id, errorCategory: 'auth', error: 'stored_password_corrupted' });
+    return msg;
+  }
   try {
     await testConnection(router);
     db.prepare(`UPDATE routers SET connection_status='ok', last_error=NULL WHERE id=?`).run(router.id);
@@ -259,8 +273,13 @@ app.put('/api/routers/:id', auth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'router not found' });
   const { name, company, host, api_port, secure, username, password } = req.body || {};
   const keepPw = password === undefined || password === '';
-  const nextPw = keepPw ? row.password_enc : encryptPw(password).enc;
-  const nextIv = keepPw ? row.password_iv : encryptPw(password).iv;
+  let nextPw = row.password_enc;
+  let nextIv = row.password_iv;
+  if (!keepPw) {
+    const sealed = encryptPw(password);
+    nextPw = sealed.enc;
+    nextIv = sealed.iv;
+  }
   db.prepare(
     `UPDATE routers SET name=?, company=?, host=?, api_port=?, secure=?, username=?, password_enc=?, password_iv=?,
      connection_status='unknown' WHERE id=?`
@@ -292,6 +311,13 @@ function getRouter(id) {
 }
 
 app.post('/api/routers/:id/test', auth, async (req, res) => {
+  const rawRow = db.prepare('SELECT * FROM routers WHERE id=?').get(req.params.id);
+  if (!rawRow) return res.status(404).json({ error: 'router not found' });
+  if (isStoredPasswordCorrupted(rawRow)) {
+    const msg = 'Password tersimpan rusak / tidak bisa didekripsi (kemungkinan akibat bug Edit router versi lama atau kunci enkripsi berubah). Silakan Edit router lalu isi ulang password dan Simpan, kemudian Tes Koneksi lagi.';
+    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(msg, rawRow.id);
+    return res.status(502).json({ ok: false, error: msg });
+  }
   const router = getRouter(req.params.id);
   if (!router) return res.status(404).json({ error: 'router not found' });
   const t0 = Date.now();
@@ -315,6 +341,13 @@ app.post('/api/routers/:id/test', auth, async (req, res) => {
 });
 
 app.post('/api/routers/:id/sync', auth, async (req, res) => {
+  const rawRow = db.prepare('SELECT * FROM routers WHERE id=?').get(req.params.id);
+  if (!rawRow) return res.status(404).json({ error: 'router not found' });
+  if (isStoredPasswordCorrupted(rawRow)) {
+    const msg = 'Password tersimpan rusak / tidak bisa didekripsi (kemungkinan akibat bug Edit router versi lama atau kunci enkripsi berubah). Silakan Edit router lalu isi ulang password dan Simpan, kemudian Sync ulang.';
+    db.prepare(`UPDATE routers SET connection_status='failed', last_error=? WHERE id=?`).run(msg, rawRow.id);
+    return res.status(502).json({ ok: false, error: msg });
+  }
   const router = getRouter(req.params.id);
   if (!router) return res.status(404).json({ error: 'router not found' });
   const t0 = Date.now();
